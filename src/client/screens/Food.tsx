@@ -1,0 +1,389 @@
+import { useEffect, useRef, useState } from "react";
+import { api, compressImage, formatInt, formatQty, messageOf } from "../api";
+import { timeValue } from "../../shared/time";
+import type { FavoriteDTO, FoodDayDTO, MealDTO } from "../../shared/types";
+import { Banner, Confirm, useNav, useToast } from "../ui";
+
+type FormState = {
+  name: string;
+  calories: string;
+  protein: string;
+  carbs: string;
+  fat: string;
+  note: string;
+  photo: string | null;
+};
+
+const emptyForm: FormState = { name: "", calories: "", protein: "", carbs: "", fat: "", note: "", photo: null };
+
+function num(value: string): number | null {
+  if (value.trim() === "") return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+export function FoodScreen({ search }: { search: URLSearchParams }) {
+  const { go } = useNav();
+  const toast = useToast();
+  const editId = search.get("edit");
+  const [date, setDate] = useState(search.get("date") ?? "");
+  const [time, setTime] = useState("");
+  const [food, setFood] = useState<FoodDayDTO | null>(null);
+  const [form, setForm] = useState<FormState>(emptyForm);
+  const [aiImage, setAiImage] = useState<string | null>(null);
+  const [editingFavs, setEditingFavs] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [removeId, setRemoveId] = useState<string | null>(null);
+  const fileRef = useRef<HTMLInputElement | null>(null);
+  const appliedEdit = useRef<string | null>(null);
+
+  useEffect(() => {
+    let stop = false;
+    const query = date ? `?date=${encodeURIComponent(date)}` : "";
+    api<FoodDayDTO>(`/api/meals${query}`)
+      .then((data) => {
+        if (stop) return;
+        setFood(data);
+        setDate((current) => current || data.date);
+        setTime((current) => current || data.nowTime.slice(0, 5));
+      })
+      .catch((err) => {
+        if (!stop) setError(messageOf(err));
+      });
+    return () => {
+      stop = true;
+    };
+  }, [date]);
+
+  useEffect(() => {
+    if (!food || !editId || appliedEdit.current === editId) return;
+    const meal = food.meals.find((item) => item.id === editId);
+    if (!meal) return;
+    appliedEdit.current = editId;
+    setForm({
+      name: meal.name,
+      calories: String(meal.calories),
+      protein: String(meal.protein),
+      carbs: String(meal.carbs),
+      fat: String(meal.fat),
+      note: meal.note ?? "",
+      photo: meal.photo,
+    });
+    setTime(timeValue(new Date(meal.loggedAt)));
+    setAiImage(null);
+  }, [food, editId]);
+
+  function patch(partial: Partial<FormState>) {
+    setForm((current) => ({ ...current, ...partial }));
+  }
+
+  async function reload() {
+    const query = date ? `?date=${encodeURIComponent(date)}` : "";
+    const data = await api<FoodDayDTO>(`/api/meals${query}`);
+    setFood(data);
+  }
+
+  async function onPhoto(file: File) {
+    setError(null);
+    try {
+      const big = await compressImage(file, 1024, 0.8);
+      let thumb = await compressImage(file, 480, 0.6);
+      if (thumb.length > 120_000) thumb = await compressImage(file, 360, 0.5);
+      setAiImage(big);
+      if (thumb.length > 120_000) {
+        patch({ photo: null });
+        setError("That photo is too big to keep. You can still estimate from it.");
+      } else {
+        patch({ photo: thumb });
+      }
+    } catch (err) {
+      setError(messageOf(err));
+    }
+  }
+
+  async function estimate() {
+    setBusy(true);
+    setError(null);
+    try {
+      const estimate = await api<{ name: string; calories: number; protein: number; carbs: number; fat: number }>(
+        "/api/meals/estimate",
+        {
+          method: "POST",
+          body: JSON.stringify({ note: form.note, imageDataUrl: aiImage ?? form.photo }),
+        },
+      );
+      patch({
+        name: estimate.name,
+        calories: String(estimate.calories),
+        protein: String(estimate.protein),
+        carbs: String(estimate.carbs),
+        fat: String(estimate.fat),
+      });
+    } catch (err) {
+      setError(messageOf(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function payload() {
+    const calories = num(form.calories);
+    const protein = num(form.protein);
+    const carbs = num(form.carbs);
+    const fat = num(form.fat);
+    if (!form.name.trim()) throw new Error("Enter a meal name");
+    if (calories == null || protein == null || carbs == null || fat == null) throw new Error("Enter calories, protein, carbs, and fat");
+    return {
+      name: form.name.trim(),
+      calories,
+      protein,
+      carbs,
+      fat,
+      note: form.note,
+      photo: form.photo,
+      date: date || food?.today,
+      time: (time || food?.nowTime || "12:00").slice(0, 5),
+    };
+  }
+
+  async function saveFavorite() {
+    setBusy(true);
+    setError(null);
+    try {
+      const body = payload();
+      await api("/api/favorites", { method: "POST", body: JSON.stringify(body) });
+      await reload();
+      toast({ text: "Saved as usual" });
+    } catch (err) {
+      setError(messageOf(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function logMeal() {
+    setBusy(true);
+    setError(null);
+    try {
+      const body = payload();
+      if (editId) {
+        await api(`/api/meals/${editId}`, { method: "PUT", body: JSON.stringify(body) });
+        appliedEdit.current = null;
+        go(`/food?date=${body.date}`, { replace: true });
+      } else {
+        await api("/api/meals", { method: "POST", body: JSON.stringify(body) });
+        setForm(emptyForm);
+        setAiImage(null);
+      }
+      await reload();
+      toast({ text: editId ? "Meal updated" : "Meal logged" });
+    } catch (err) {
+      setError(messageOf(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function logFavorite(favorite: FavoriteDTO) {
+    setError(null);
+    try {
+      const when = (time || food?.nowTime || "12:00").slice(0, 5);
+      const day = date || food?.today || "";
+      const meal = await api<MealDTO>(`/api/favorites/${favorite.id}/log`, {
+        method: "POST",
+        body: JSON.stringify({ date: day, time: when }),
+      });
+      await reload();
+      toast({
+        text: `Logged ${meal.name}`,
+        undo: () => {
+          api(`/api/meals/${meal.id}`, { method: "DELETE" })
+            .then(() => reload())
+            .catch((err) => setError(messageOf(err)));
+        },
+      });
+    } catch (err) {
+      setError(messageOf(err));
+    }
+  }
+
+  async function deleteMeal() {
+    if (!removeId) return;
+    setBusy(true);
+    try {
+      await api(`/api/meals/${removeId}`, { method: "DELETE" });
+      if (editId === removeId) {
+        appliedEdit.current = null;
+        setForm(emptyForm);
+        go(`/food?date=${date}`, { replace: true });
+      }
+      setRemoveId(null);
+      await reload();
+    } catch (err) {
+      setError(messageOf(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function deleteFavorite(id: string) {
+    setError(null);
+    try {
+      await api(`/api/favorites/${id}`, { method: "DELETE" });
+      await reload();
+    } catch (err) {
+      setError(messageOf(err));
+    }
+  }
+
+  const carbs = num(form.carbs);
+  const editing = Boolean(editId && appliedEdit.current === editId);
+
+  return (
+    <>
+      <div className="top">
+        <h1>Food</h1>
+      </div>
+      <p className="quiet">Times are America/Boise.</p>
+      <div className="when">
+        <label className="field">
+          <span>Date</span>
+          <input type="date" value={date} onChange={(event) => setDate(event.target.value)} />
+        </label>
+        <label className="field">
+          <span>Time</span>
+          <input type="time" value={time} onChange={(event) => setTime(event.target.value.slice(0, 5))} />
+        </label>
+      </div>
+      <Banner text={error} />
+
+      <div className="section-label">
+        <h2>Usual</h2>
+        <button type="button" className="linkish" onClick={() => setEditingFavs((value) => !value)}>
+          {editingFavs ? "Done" : "Edit"}
+        </button>
+      </div>
+      {food && food.favorites.length > 0 ? (
+        <div className="favs">
+          {food.favorites.map((favorite) =>
+            editingFavs ? (
+              <button key={favorite.id} type="button" className="chip" onClick={() => void deleteFavorite(favorite.id)}>
+                <strong>{favorite.name}</strong>
+                <small>Remove</small>
+              </button>
+            ) : (
+              <button key={favorite.id} type="button" className="chip" onClick={() => void logFavorite(favorite)}>
+                <strong>{favorite.name}</strong>
+                <small>{formatInt(favorite.calories)} kcal</small>
+              </button>
+            ),
+          )}
+        </div>
+      ) : (
+        <p className="quiet">No usual meals yet.</p>
+      )}
+
+      <section className="card">
+        <p className="kicker">{editing ? "Edit meal" : "Log a meal"}</p>
+        <input ref={fileRef} hidden type="file" accept="image/*" onChange={(event) => {
+          const file = event.target.files?.[0];
+          event.target.value = "";
+          if (file) void onPhoto(file);
+        }} />
+        <button type="button" className="secondary" onClick={() => fileRef.current?.click()}>
+          {form.photo ? "Replace photo" : "Add a photo"}
+        </button>
+        {form.photo && <img className="preview" src={form.photo} alt="" />}
+        {form.photo && (
+          <button type="button" className="ghost" onClick={() => { patch({ photo: null }); setAiImage(null); }}>
+            Remove photo
+          </button>
+        )}
+        <label className="field">
+          <span>Note</span>
+          <textarea
+            value={form.note}
+            placeholder="Portions, sauces, what was on the plate"
+            onChange={(event) => patch({ note: event.target.value })}
+          />
+        </label>
+        <button type="button" className="secondary" disabled={busy || !food?.aiConfigured} onClick={() => void estimate()}>
+          Estimate
+        </button>
+        {food && !food.aiConfigured && <p className="quiet">No AI key is set. Enter the meal yourself.</p>}
+
+        <label className="field">
+          <span>Name</span>
+          <input value={form.name} onChange={(event) => patch({ name: event.target.value })} />
+        </label>
+        <div className="macros">
+          <label className="field">
+            <span>Calories</span>
+            <input inputMode="decimal" value={form.calories} onChange={(event) => patch({ calories: event.target.value })} />
+          </label>
+          <label className="field">
+            <span>Protein (g)</span>
+            <input inputMode="decimal" value={form.protein} onChange={(event) => patch({ protein: event.target.value })} />
+          </label>
+          <label className="field">
+            <span>Carbs (g)</span>
+            <input inputMode="decimal" value={form.carbs} onChange={(event) => patch({ carbs: event.target.value })} />
+          </label>
+          <label className="field">
+            <span>Fat (g)</span>
+            <input inputMode="decimal" value={form.fat} onChange={(event) => patch({ fat: event.target.value })} />
+          </label>
+        </div>
+        <aside className="loop">
+          <span className="kicker">For Loop</span>
+          <strong>{carbs == null ? "—" : formatQty(carbs)}</strong>
+          <span>g carbs</span>
+          <p>You enter it in Loop</p>
+        </aside>
+        <div className="split">
+          <button type="button" className="secondary" disabled={busy} onClick={() => void saveFavorite()}>
+            Save as usual
+          </button>
+          <button type="button" className="primary" disabled={busy} onClick={() => void logMeal()}>
+            {editing ? "Save changes" : "Log meal"}
+          </button>
+        </div>
+        {editing && (
+          <button type="button" className="ghost" onClick={() => setRemoveId(editId)}>
+            Delete meal
+          </button>
+        )}
+      </section>
+
+      <h2>Logged</h2>
+      {food && food.meals.length === 0 && <p className="quiet">Nothing logged for this day.</p>}
+      {food?.meals.map((meal) => (
+        <div key={meal.id} className="meal">
+          <button type="button" className="ex-name" onClick={() => go(`/food?edit=${meal.id}&date=${meal.date}`)}>
+            <strong>{meal.name}</strong>
+            <small className="quiet">
+              {meal.timeLabel} · {formatInt(meal.calories)} kcal · {formatQty(meal.protein)} protein
+            </small>
+          </button>
+          {meal.photo && <img className="thumb" src={meal.photo} alt="" />}
+          <button type="button" className="linkish" onClick={() => setRemoveId(meal.id)}>
+            Delete
+          </button>
+        </div>
+      ))}
+
+      {removeId && (
+        <Confirm
+          title="Delete this meal?"
+          body="It comes off the day's totals."
+          confirmLabel="Delete"
+          danger
+          busy={busy}
+          onCancel={() => setRemoveId(null)}
+          onConfirm={() => void deleteMeal()}
+        />
+      )}
+    </>
+  );
+}
