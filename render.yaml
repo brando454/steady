@@ -1,0 +1,45 @@
+# Render Blueprint for Steady.
+# https://render.com/docs/blueprint-spec
+#
+# The database is the paid 0.1 CPU / 256 MB plan so it does not expire.
+# The web service starts on the free plan. Change `plan` to 0.5c-512mb
+# if a cold start at 5:30 AM is a problem. See the README.
+
+services:
+  - type: web
+    name: steady
+    runtime: node
+    region: oregon
+    plan: free
+    buildCommand: npm install --include=dev && npm run build
+    startCommand: npm start
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: DATABASE_URL
+        fromDatabase:
+          name: steady-db
+          property: connectionString
+      - key: APP_PASSCODE
+        sync: false
+      - key: COACH_API_TOKEN
+        sync: false
+      - key: NIGHTSCOUT_URL
+        sync: false
+      - key: NIGHTSCOUT_TOKEN
+        sync: false
+      - key: AI_API_KEY
+        sync: false
+      - key: AI_BASE_URL
+        value: https://api.openai.com/v1
+      - key: AI_MODEL
+        value: gpt-4o-mini
+
+databases:
+  - name: steady-db
+    databaseName: steady
+    region: oregon
+    plan: 0.1c-256mb
+    diskSizeGB: 1
+    ipAllowList: []

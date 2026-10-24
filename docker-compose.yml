@@ -1,0 +1,15 @@
+# Local Postgres only. Render uses the database in render.yaml.
+services:
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: steady
+      POSTGRES_PASSWORD: steady
+      POSTGRES_DB: steady
+    ports:
+      - "5432:5432"
+    volumes:
+      - steady-pg:/var/lib/postgresql/data
+
+volumes:
+  steady-pg:
