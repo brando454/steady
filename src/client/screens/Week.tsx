@@ -58,15 +58,17 @@ export function WeekScreen({ dayId }: { dayId?: string }) {
             <h1>{day.name}</h1>
             <p className="quiet">{day.summary}</p>
             {week.rampNote && <p className="ramp">{week.rampNote}</p>}
-            <ul className="lines card">
-              {day.exercises.map((exercise) => (
-                <li key={exercise.name}>
-                  <strong>{exercise.name}</strong>
-                  <div className="quiet">{exercise.detail}</div>
-                </li>
-              ))}
-            </ul>
-            <button type="button" className="primary" disabled={busy} onClick={() => start(day.id)}>
+            <section className="card plan">
+              <ul className="lines">
+                {day.exercises.map((exercise) => (
+                  <li key={exercise.name}>
+                    <strong>{exercise.name}</strong>
+                    <div className="quiet">{exercise.detail}</div>
+                  </li>
+                ))}
+              </ul>
+            </section>
+            <button type="button" className="primary plan-start" disabled={busy} onClick={() => start(day.id)}>
               {day.status === "in_progress" ? "Resume workout" : day.status === "done" ? "Start again" : "Start workout"}
             </button>
           </>
