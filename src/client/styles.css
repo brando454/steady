@@ -39,7 +39,11 @@
 }
 
 * { box-sizing: border-box; }
-html, body, #root { min-height: 100%; }
+html, body, #root {
+  height: 100%;
+  overflow: hidden;
+}
+html, body { overscroll-behavior: none; }
 body {
   margin: 0;
   background: var(--bg);
@@ -58,15 +62,22 @@ h1, h2, p { margin: 0; }
 h1 { font-size: 20px; font-weight: 600; letter-spacing: -0.02em; line-height: 26px; }
 h2 { font-size: 15px; font-weight: 600; letter-spacing: -0.01em; line-height: 20px; }
 
-.shell { min-height: 100dvh; }
+.shell { height: 100%; overflow: hidden; }
 
 .main {
+  position: fixed;
+  top: 0;
+  bottom: calc(36px + env(safe-area-inset-bottom, 0px));
+  left: max(0px, calc(50% - 240px));
   width: min(480px, 100%);
-  margin: 0 auto;
+  overflow-x: hidden;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
   padding:
-    14px
+    20px
     max(16px, env(safe-area-inset-right, 0px))
-    calc(52px + env(safe-area-inset-bottom, 0px))
+    16px
     max(16px, env(safe-area-inset-left, 0px));
 }
 main.main > * + * { margin-top: 22px; }
@@ -76,7 +87,10 @@ main.main > .top + * { margin-top: 28px; }
 main.main > .glucose-pin,
 main.main > .log-dock,
 main.main > .sheet-back { margin-top: 0; }
-body.logging .main { padding-bottom: calc(168px + env(safe-area-inset-bottom)); }
+body.logging .main {
+  padding-bottom: 132px;
+  scroll-padding-bottom: 132px;
+}
 
 .tabbar {
   position: fixed;
@@ -86,8 +100,7 @@ body.logging .main { padding-bottom: calc(168px + env(safe-area-inset-bottom)); 
   z-index: 20;
   display: grid;
   grid-template-columns: repeat(4, 1fr);
-  background: color-mix(in srgb, var(--card) 92%, transparent);
-  backdrop-filter: blur(16px);
+  background: var(--card);
   border-top: 1px solid var(--line);
   padding-bottom: env(safe-area-inset-bottom, 0px);
   padding-left: env(safe-area-inset-left, 0px);
@@ -113,7 +126,11 @@ body.logging .main { padding-bottom: calc(168px + env(safe-area-inset-bottom)); 
 .tab.active .bar { background: var(--accent); }
 
 .boot, .lock {
-  min-height: 100dvh;
+  height: 100%;
+  min-height: 0;
+  overflow: auto;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
   display: grid;
   place-items: center;
   padding:
@@ -581,7 +598,7 @@ textarea { min-height: 88px; resize: vertical; }
   padding: 7px 8px;
   border-radius: 10px;
   background: var(--bg);
-  scroll-margin-bottom: 190px;
+  scroll-margin-bottom: 154px;
 }
 .set-row.now { background: var(--accent-soft); }
 .set-label {

@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type MutableRefObject } from "react";
+import { createPortal } from "react-dom";
 import { api, messageOf } from "../api";
 import type { GlucoseDTO, SessionDTO, SessionExerciseDTO, SetDTO } from "../../shared/types";
 import { Back, Banner, Confirm, TrendArrow, useNav, useNow } from "../ui";
@@ -319,21 +320,27 @@ export function SessionScreen({ sessionId }: { sessionId: string }) {
   useEffect(() => {
     const card = glucoseCard.current;
     if (!showGlucose || !card) return;
+    const root = document.querySelector(".main");
+    const scroller = root instanceof HTMLElement ? root : null;
     let stop = false;
     const pinIfClear = () => {
       if (stop) return;
-      setGlucosePinned(card.getBoundingClientRect().bottom <= 4);
+      const edge = scroller ? scroller.getBoundingClientRect().top : 0;
+      setGlucosePinned(card.getBoundingClientRect().bottom <= edge + 4);
     };
     const observer = new IntersectionObserver(pinIfClear, {
+      root: scroller,
       rootMargin: "-4px 0px 0px 0px",
       threshold: [0, 0.25, 0.5, 0.75, 1],
     });
     observer.observe(card);
     pinIfClear();
+    scroller?.addEventListener("scroll", pinIfClear, { passive: true });
     window.addEventListener("resize", pinIfClear);
     return () => {
       stop = true;
       observer.disconnect();
+      scroller?.removeEventListener("scroll", pinIfClear);
       window.removeEventListener("resize", pinIfClear);
     };
   }, [showGlucose, session?.id]);
@@ -389,7 +396,7 @@ export function SessionScreen({ sessionId }: { sessionId: string }) {
           {low && <p className="snack">{snack}</p>}
         </section>
       )}
-      {reading && (
+      {reading && createPortal(
         <div className={`glucose-pin${glucosePinned ? " on" : ""}`} aria-hidden={glucosePinned ? undefined : true}>
           <div className="glucose-pin-row">
             <button
@@ -408,7 +415,8 @@ export function SessionScreen({ sessionId }: { sessionId: string }) {
               {elapsedLabel(session.startedAt, endMs)}
             </div>
           </div>
-        </div>
+        </div>,
+        document.body,
       )}
 
       {session.exercises.map((exercise) => (
@@ -527,7 +535,7 @@ export function SessionScreen({ sessionId }: { sessionId: string }) {
         </button>
       )}
 
-      {!finished && (
+      {!finished && createPortal(
         <div className="log-dock">
           <div className="dock-rest">
             {rest ? (
@@ -548,7 +556,8 @@ export function SessionScreen({ sessionId }: { sessionId: string }) {
               Finish
             </button>
           )}
-        </div>
+        </div>,
+        document.body,
       )}
 
       {ask === "finish" && (
