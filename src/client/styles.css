@@ -143,6 +143,19 @@ body.logging .main { padding-bottom: calc(402px + env(safe-area-inset-bottom)); 
   margin-bottom: 4px;
 }
 .quiet { color: var(--muted); }
+.status-row {
+  display: grid;
+  gap: 4px;
+  margin: 12px 0 16px;
+}
+.status-row span {
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 650;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.status-row p { font-weight: 650; }
 .top {
   display: flex;
   align-items: center;

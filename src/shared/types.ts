@@ -171,7 +171,16 @@ export type ExerciseHistoryDTO = {
 };
 
 export type GlucoseDTO =
-  | { available: false }
+  | {
+      available: false;
+      reason?: string;
+      detail?: string;
+      mgdl?: number;
+      arrow?: string;
+      label?: string;
+      at?: string;
+      minutesAgo?: number;
+    }
   | {
       available: true;
       mgdl: number;

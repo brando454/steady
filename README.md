@@ -49,7 +49,7 @@ On a laptop or in development, the first boot also inserts sample workouts, meal
 | `DATABASE_URL` | Yes | Postgres connection string. |
 | `APP_PASSCODE` | Yes | Unlocks the app once per device. |
 | `COACH_API_TOKEN` | No | Bearer token for the coach read API. If unset, that route returns 503. |
-| `NIGHTSCOUT_URL` | No | Nightscout site origin, no path. If either Nightscout variable is missing, the glucose card is hidden. |
+| `NIGHTSCOUT_URL` | No | Nightscout site. A trailing slash, `/api/v1`, or a pasted `?token=` query is ignored. If either Nightscout variable is missing, the glucose card is hidden and Settings says which one. |
 | `NIGHTSCOUT_TOKEN` | No | Read token sent as the `token` query parameter. |
 | `AI_API_KEY` | No | Key for meal estimates. If unset, meals are entered by hand. |
 | `AI_BASE_URL` | No | OpenAI-compatible API origin. Defaults to `https://api.openai.com/v1`. |

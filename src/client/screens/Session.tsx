@@ -264,7 +264,8 @@ export function SessionScreen({ sessionId }: { sessionId: string }) {
   const draft = current ? drafts[current.set.id] : undefined;
   const finished = Boolean(session?.completedAt);
   const cardioLeft = session?.exercises.some((exercise) => exercise.isCardio && exercise.sets.every((set) => !set.loggedAt));
-  const low = Boolean(glucose?.available && glucose.mgdl < 120 && cardioLeft);
+  const reading = glucose && glucose.mgdl != null && (glucose.available || glucose.reason === "stale") ? glucose : null;
+  const low = Boolean(glucose?.available && glucose.mgdl != null && glucose.mgdl < 120 && cardioLeft);
   const snack = "Before cardio, a low snack handy is a good idea under about 120.";
   const canLog = Boolean(
     draft &&
@@ -290,9 +291,9 @@ export function SessionScreen({ sessionId }: { sessionId: string }) {
       <div className="session-top">
         <Back to={session.dayId ? `/workout/day/${session.dayId}` : "/workout"} label="Back" />
         <div className="head-actions">
-          {glucose?.available && (
+          {reading && (
             <button type="button" className="chip-mini" onClick={() => document.getElementById("glucose")?.scrollIntoView({ behavior: "smooth" })}>
-              {glucose.mgdl} {glucose.arrow}
+              {reading.mgdl} {reading.arrow}
             </button>
           )}
           {!finished && (
@@ -310,16 +311,17 @@ export function SessionScreen({ sessionId }: { sessionId: string }) {
       {session.rampNote && <p className="ramp">{session.rampNote}</p>}
       <Banner text={error} />
 
-      {glucose?.available && (
+      {reading && (
         <section className="card" id="glucose">
           <p className="kicker">Glucose</p>
           <p className="glucose-num">
-            {glucose.mgdl}
-            <span>{glucose.arrow}</span>
+            {reading.mgdl}
+            <span>{reading.arrow}</span>
           </p>
           <p className="quiet">
-            {glucose.label} · {glucose.minutesAgo === 0 ? "just now" : `${glucose.minutesAgo} min ago`} · mg/dL
+            {reading.label} · {reading.minutesAgo === 0 ? "just now" : `${reading.minutesAgo} min ago`} · mg/dL
           </p>
+          {!reading.available && reading.reason === "stale" && <p className="quiet">Older than 15 minutes.</p>}
           {low && <p className="snack">{snack}</p>}
         </section>
       )}
