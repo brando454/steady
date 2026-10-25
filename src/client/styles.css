@@ -60,13 +60,13 @@ h2 { font-size: 15px; font-weight: 600; letter-spacing: -0.01em; line-height: 20
 
 .shell { min-height: 100dvh; }
 
-/* Opaque cap over the status bar, plus a few pixels past it so the island edge cannot feather the first line. */
+/* Opaque cap over the status bar. A couple of pixels past the inset keep the island edge from feathering the first line. */
 .safe-top {
   position: fixed;
   top: 0;
   left: 0;
   right: 0;
-  height: calc(env(safe-area-inset-top, 0px) + 8px);
+  height: calc(env(safe-area-inset-top, 0px) + 2px);
   background-color: var(--bg);
   background-image: none;
   opacity: 1;
@@ -85,9 +85,9 @@ h2 { font-size: 15px; font-weight: 600; letter-spacing: -0.01em; line-height: 20
   width: min(480px, 100%);
   margin: 0 auto;
   padding:
-    calc(env(safe-area-inset-top, 0px) + 40px)
+    calc(env(safe-area-inset-top, 0px) + 12px)
     max(16px, env(safe-area-inset-right, 0px))
-    calc(74px + env(safe-area-inset-bottom, 0px))
+    calc(52px + env(safe-area-inset-bottom, 0px))
     max(16px, env(safe-area-inset-left, 0px));
 }
 main.main > * + * { margin-top: 22px; }
@@ -97,7 +97,7 @@ main.main > .top + * { margin-top: 28px; }
 main.main > .glucose-pin,
 main.main > .log-dock,
 main.main > .sheet-back { margin-top: 0; }
-body.logging .main { padding-bottom: calc(176px + env(safe-area-inset-bottom)); }
+body.logging .main { padding-bottom: calc(168px + env(safe-area-inset-bottom)); }
 
 .tabbar {
   position: fixed;
@@ -115,20 +115,21 @@ body.logging .main { padding-bottom: calc(176px + env(safe-area-inset-bottom)); 
   padding-right: env(safe-area-inset-right, 0px);
 }
 .tab {
-  min-height: 44px;
+  min-height: 36px;
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 4px;
+  gap: 2px;
   border: 0;
   background: transparent;
   color: var(--muted);
   font-weight: 400;
   font-size: 11px;
-  padding-top: 6px;
+  padding-top: 2px;
+  padding-bottom: 1px;
 }
-.tab .bar { width: 22px; height: 4px; border-radius: 2px; background: var(--fill); }
+.tab .bar { width: 18px; height: 3px; border-radius: 2px; background: var(--fill); }
 .tab.active { color: var(--text); font-weight: 600; }
 .tab.active .bar { background: var(--accent); }
 
@@ -403,8 +404,15 @@ body.logging .main { padding-bottom: calc(176px + env(safe-area-inset-bottom)); 
   min-height: 32px;
 }
 
-.when { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px; width: 100%; min-width: 0; }
-.when .field, .when input { min-width: 0; max-width: 100%; }
+.when {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 12px;
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+}
+.when .field { min-width: 0; max-width: 100%; overflow: hidden; }
 .field { display: grid; gap: 8px; margin: 0; font-weight: 400; min-width: 0; }
 .field span { color: var(--muted); font-size: 12px; font-weight: 400; }
 input, textarea {
@@ -420,7 +428,32 @@ input, textarea {
   font-size: 16px;
   font-weight: 600;
 }
-input[type="date"], input[type="time"] { min-width: 0; }
+input[type="date"],
+input[type="time"] {
+  display: block;
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  box-sizing: border-box;
+  margin: 0;
+  padding: 8px 6px;
+  -webkit-appearance: none;
+  appearance: none;
+}
+input[type="date"]::-webkit-date-and-time-value,
+input[type="time"]::-webkit-date-and-time-value {
+  text-align: left;
+  margin: 0;
+  min-width: 0;
+}
+input[type="date"]::-webkit-datetime-edit,
+input[type="time"]::-webkit-datetime-edit,
+input[type="date"]::-webkit-datetime-edit-fields-wrapper,
+input[type="time"]::-webkit-datetime-edit-fields-wrapper {
+  padding: 0;
+  margin: 0;
+  min-width: 0;
+}
 textarea { min-height: 88px; resize: vertical; }
 .hero-input { font-size: 1.4rem; font-weight: 600; letter-spacing: -0.03em; text-align: center; font-variant-numeric: tabular-nums; }
 .macros { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px 12px; }
@@ -479,19 +512,19 @@ textarea { min-height: 88px; resize: vertical; }
 .timer-chip i { width: 7px; height: 7px; border-radius: 4px; background: var(--accent); }
 .timer-chip.slim { padding: 5px 10px; font-size: 12px; }
 
-#glucose { scroll-margin-top: calc(env(safe-area-inset-top, 0px) + 76px); }
+#glucose { scroll-margin-top: calc(env(safe-area-inset-top, 0px) + 64px); }
 .glucose-pin {
   position: fixed;
-  top: calc(env(safe-area-inset-top, 0px) + 8px);
+  top: calc(env(safe-area-inset-top, 0px) + 2px);
   left: 0;
   right: 0;
   z-index: 28;
   display: flex;
   justify-content: center;
   padding:
-    10px
+    8px
     max(14px, env(safe-area-inset-right, 0px))
-    10px
+    8px
     max(14px, env(safe-area-inset-left, 0px));
   background-color: var(--bg);
   background-image: none;
@@ -585,7 +618,35 @@ textarea { min-height: 88px; resize: vertical; }
   align-items: center;
   gap: 6px;
 }
-.mini-step { display: flex; align-items: center; gap: 4px; }
+.mini-step { display: flex; align-items: center; gap: 4px; min-width: 0; }
+.mini-step input {
+  width: 56px;
+  min-width: 0;
+  max-width: 72px;
+  flex: none;
+  height: 32px;
+  min-height: 32px;
+  margin: 0;
+  padding: 0 2px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  box-shadow: none;
+  color: var(--text);
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 32px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+.mini-step input:focus {
+  background: var(--card);
+  border-color: var(--line);
+  outline: none;
+}
+.mini-step input::placeholder { color: var(--muted); font-weight: 600; }
+.mini-step input:invalid { box-shadow: none; }
+.mini-unit { color: var(--muted); font-size: 11px; font-weight: 400; }
 .mini-step button {
   width: 32px;
   height: 32px;
@@ -624,7 +685,7 @@ textarea { min-height: 88px; resize: vertical; }
   left: 50%;
   transform: translateX(-50%);
   width: min(480px, 100%);
-  bottom: calc(44px + env(safe-area-inset-bottom, 0px));
+  bottom: calc(36px + env(safe-area-inset-bottom, 0px));
   z-index: 19;
   background: var(--bg);
   border-top: 1px solid var(--line);
@@ -716,7 +777,7 @@ textarea { min-height: 88px; resize: vertical; }
   gap: 12px;
   z-index: 40;
 }
-body.logging .toast { bottom: calc(128px + env(safe-area-inset-bottom)); }
+body.logging .toast { bottom: calc(120px + env(safe-area-inset-bottom)); }
 .toast button {
   background: transparent;
   color: inherit;

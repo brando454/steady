@@ -53,6 +53,7 @@ export type SessionExerciseDTO = {
   notes: string | null;
   cardioMin: number | null;
   lastTime: string;
+  lastWeightLb: number | null;
   prLine: string;
   swaps: { id: string; name: string }[];
   sets: SetDTO[];
