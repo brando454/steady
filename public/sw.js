@@ -1,10 +1,10 @@
-const CACHE = "steady-shell-v1";
+const CACHE = "steady-shell-v2";
 
 self.addEventListener("install", (event) => {
   event.waitUntil(
     caches
       .open(CACHE)
-      .then((cache) => cache.addAll(["/", "/manifest.webmanifest", "/icons/icon-192.png", "/icons/icon-512.png"]))
+      .then((cache) => cache.addAll(["/manifest.webmanifest", "/icons/icon-192.png", "/icons/icon-512.png"]))
       .then(() => self.skipWaiting()),
   );
 });

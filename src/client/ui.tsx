@@ -1,4 +1,5 @@
 import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
+import { chartScale } from "../shared/format";
 
 type Go = (to: string, opts?: { replace?: boolean }) => void;
 type NavValue = { path: string; go: Go };
@@ -143,11 +144,7 @@ export function TrendChart({
   const width = 320;
   const height = 176;
   const pad = { l: 38, r: 8, t: 12, b: 26 };
-  const min = Math.min(...values);
-  const max = Math.max(...values);
-  const span = Math.max(max - min, 0.8);
-  const yMin = min - span * 0.18;
-  const yMax = max + span * 0.18;
+  const { yMin, yMax, ticks } = chartScale(values);
   const xAt = (index: number) =>
     pad.l + (points.length <= 1 ? (width - pad.l - pad.r) / 2 : (index / (points.length - 1)) * (width - pad.l - pad.r));
   const yAt = (value: number) => pad.t + (1 - (value - yMin) / (yMax - yMin)) * (height - pad.t - pad.b);
@@ -173,7 +170,7 @@ export function TrendChart({
   return (
     <div className="chart-block">
       <svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label={`${dotLabel}${lineLabel ? `, ${lineLabel}` : ""}`}>
-        {[yMin, (yMin + yMax) / 2, yMax].map((tick) => (
+        {ticks.map((tick) => (
           <g key={tick}>
             <line x1={pad.l} x2={width - pad.r} y1={yAt(tick)} y2={yAt(tick)} className="grid-line" />
             <text x={pad.l - 6} y={yAt(tick) + 4} className="axis" textAnchor="end">

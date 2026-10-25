@@ -8,7 +8,7 @@
   },
   "scripts": {
     "dev": "concurrently -k -n server,web -c blue,green \"tsx watch src/server/index.ts\" \"vite\"",
-    "build": "vite build && esbuild src/server/index.ts --bundle --platform=node --target=node22 --format=cjs --outfile=dist/server.cjs --external:pg",
+    "build": "rm -rf dist && vite build && esbuild src/server/index.ts --bundle --platform=node --target=node22 --format=cjs --outfile=dist/server.cjs --external:pg",
     "start": "node dist/server.cjs",
     "typecheck": "tsc --noEmit",
     "test": "tsx --test tests/*.test.ts"

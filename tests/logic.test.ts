@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { formatPerformance } from "../src/shared/format";
+import { chartScale, formatPerformance } from "../src/shared/format";
 import {
   annotatePrs,
   averageChange,
@@ -181,4 +181,16 @@ test("greeting follows the hour and set labels stay readable", () => {
   assert.equal(formatPerformance(50, 8, "reps", true), "50 lb × 8 / side");
   assert.equal(formatPerformance(70, 40, "meters", false), "70 lb × 40 m");
   assert.equal(formatPerformance(0, 12, "reps", false), "12 reps");
+});
+
+test("weight chart keeps a minimum range and distinct ticks", () => {
+  const flat = chartScale([215, 215]);
+  assert.deepEqual(flat.ticks, [212, 214, 216, 218]);
+  assert.ok(flat.yMin <= 212 && flat.yMax >= 218);
+  assert.ok(flat.yMin < 215 && flat.yMax > 215);
+  assert.equal(new Set(flat.ticks).size, flat.ticks.length);
+
+  const wide = chartScale([200, 230]);
+  assert.deepEqual(wide.ticks, [200, 210, 220, 230]);
+  assert.ok(wide.yMin < 200 && wide.yMax > 230);
 });

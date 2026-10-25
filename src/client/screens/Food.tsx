@@ -274,8 +274,12 @@ export function FoodScreen({ search }: { search: URLSearchParams }) {
       <Banner text={error} />
 
       <div className="fav-head">
-        <p className="quiet">Your usuals, one tap</p>
-        <p className="quiet">{editingFavs ? "Tap one to remove it" : "Swipe for more"}</p>
+        <div className="fav-copy">
+          <p className="quiet">Your usuals, one tap</p>
+          {food && food.favorites.length > 0 && (
+            <p className="quiet fav-more">{editingFavs ? "Tap one to remove it" : "Swipe for more"}</p>
+          )}
+        </div>
         <button type="button" className="linkish" onClick={() => setEditingFavs((value) => !value)}>
           {editingFavs ? "Done" : "Edit"}
         </button>
@@ -322,7 +326,7 @@ export function FoodScreen({ search }: { search: URLSearchParams }) {
           Remove photo
         </button>
       )}
-      <p className="quiet">Add a photo, a note, or both. The note fills in what the camera can&apos;t see, like portions or sauce.</p>
+      <p className="quiet photo-help">Add a photo, a note, or both. The note fills in what the camera can&apos;t see, like portions or sauce.</p>
       <button
         type="button"
         className={estimating ? "secondary pending" : "secondary"}
