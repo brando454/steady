@@ -35,6 +35,19 @@ export function macrosLeft(totals: Macros, targets: Macros): Macros {
   };
 }
 
+/** Same eaten, target, and calories-left numbers the Today screen shows. */
+export function widgetToday(date: string, updatedAt: string, totals: Macros, targets: Macros) {
+  const left = macrosLeft(totals, targets);
+  return {
+    date,
+    updatedAt,
+    calories: { eaten: totals.calories, target: targets.calories, left: left.calories },
+    protein: { eaten: totals.protein, target: targets.protein },
+    carbs: { eaten: totals.carbs, target: targets.carbs },
+    fat: { eaten: totals.fat, target: targets.fat },
+  };
+}
+
 /** Epley estimated 1RM. Bodyweight (no load) has no estimate. */
 export function epley(weightLb: number, reps: number): number {
   if (!(weightLb > 0) || !(reps > 0)) return 0;

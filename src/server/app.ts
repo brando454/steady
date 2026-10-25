@@ -7,8 +7,10 @@ import {
   COOKIE,
   clearCookie,
   rateLimit,
+  presentedWidgetToken,
   secretsMatch,
   sessionCookie,
+  widgetTokenOk,
   signSession,
   verifySession,
 } from "./auth";
@@ -27,6 +29,7 @@ import {
   getSession,
   getSettings,
   getToday,
+  getWidgetToday,
   getWeek,
   getWeights,
   listHistory,
@@ -141,6 +144,20 @@ export function createApp(passcode: string) {
       const to = readDate(req.query.to);
       res.setHeader("Cache-Control", "no-store");
       res.json(await coachReview(from, to));
+    }),
+  );
+
+  app.get(
+    "/api/widget/today",
+    asyncRoute(async (req, res) => {
+      res.setHeader("Cache-Control", "no-store");
+      const presented = presentedWidgetToken(req.get("authorization"), req.query.token);
+      if (!widgetTokenOk(presented, process.env.WIDGET_TOKEN)) {
+        const allowed = rateLimit(`widget:${req.ip}`, 20, 15 * 60 * 1000);
+        res.status(allowed ? 401 : 429).json({ error: allowed ? "Unauthorized" : "Too many tries" });
+        return;
+      }
+      res.json(await getWidgetToday());
     }),
   );
 

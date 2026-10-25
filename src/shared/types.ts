@@ -91,6 +91,15 @@ export type WeekDTO = {
   days: DayDTO[];
 };
 
+export type WidgetTodayDTO = {
+  date: string;
+  updatedAt: string;
+  calories: { eaten: number; target: number; left: number };
+  protein: { eaten: number; target: number };
+  carbs: { eaten: number; target: number };
+  fat: { eaten: number; target: number };
+};
+
 export type TodayDTO = {
   date: string;
   dateLabel: string;

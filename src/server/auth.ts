@@ -26,6 +26,25 @@ export function verifySession(token: string, passcode: string, now = Date.now())
   }
 }
 
+/** Bearer token, or the `token` query when the header is absent or empty. */
+export function presentedWidgetToken(authorization: string | undefined, queryToken: unknown): string {
+  const header = authorization ?? "";
+  const match = /^Bearer\s+(\S.*)$/i.exec(header);
+  if (match) {
+    const token = match[1].trim();
+    if (token) return token;
+  }
+  if (typeof queryToken === "string") return queryToken.trim();
+  if (Array.isArray(queryToken) && typeof queryToken[0] === "string") return queryToken[0].trim();
+  return "";
+}
+
+export function widgetTokenOk(presented: string, configured: string | undefined): boolean {
+  const expected = configured?.trim() ?? "";
+  if (!expected || !presented) return false;
+  return secretsMatch(presented, expected);
+}
+
 export function secretsMatch(input: string, expected: string): boolean {
   const left = createHash("sha256").update(input).digest();
   const right = createHash("sha256").update(expected).digest();
