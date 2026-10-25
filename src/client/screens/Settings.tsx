@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { api, messageOf } from "../api";
-import type { SettingsDTO } from "../../shared/types";
+import type { GlucoseDTO, SettingsDTO } from "../../shared/types";
+import { glucoseStatusText } from "../../shared/glucose";
 import { Back, Banner, Confirm, useToast } from "../ui";
 
 type Form = {
@@ -39,6 +40,7 @@ export function SettingsScreen({ onLock }: { onLock: () => void }) {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [confirmClear, setConfirmClear] = useState(false);
+  const [nightscout, setNightscout] = useState("Checking…");
 
   useEffect(() => {
     let stop = false;
@@ -51,6 +53,13 @@ export function SettingsScreen({ onLock }: { onLock: () => void }) {
       })
       .catch((err) => {
         if (!stop) setError(messageOf(err));
+      });
+    api<GlucoseDTO>("/api/glucose")
+      .then((reading) => {
+        if (!stop) setNightscout(glucoseStatusText(reading));
+      })
+      .catch(() => {
+        if (!stop) setNightscout("Couldn't check Nightscout");
       });
     return () => {
       stop = true;
@@ -125,6 +134,10 @@ export function SettingsScreen({ onLock }: { onLock: () => void }) {
       <Back to="/" label="Today" />
       <h1>Settings</h1>
       <Banner text={error} />
+      <div className="status-row">
+        <span>Nightscout</span>
+        <p>{nightscout}</p>
+      </div>
       {rampNote && <p className="ramp">{rampNote}</p>}
       <label className="field">
         <span>Name</span>

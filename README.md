@@ -49,7 +49,7 @@ On a laptop or in development, the first boot also inserts sample workouts, meal
 | `DATABASE_URL` | Yes | Postgres connection string. |
 | `APP_PASSCODE` | Yes | Unlocks the app once per device. |
 | `COACH_API_TOKEN` | No | Bearer token for the coach read API. If unset, that route returns 503. |
-| `NIGHTSCOUT_URL` | No | Nightscout site origin, no path. If either Nightscout variable is missing, the glucose card is hidden. |
+| `NIGHTSCOUT_URL` | No | Nightscout site. A trailing slash, `/api/v1`, or a pasted `?token=` query is ignored. If either Nightscout variable is missing, the glucose card is hidden and Settings says which one. |
 | `NIGHTSCOUT_TOKEN` | No | Read token sent as the `token` query parameter. |
 | `AI_API_KEY` | No | Key for meal estimates. If unset, meals are entered by hand. |
 | `AI_BASE_URL` | No | OpenAI-compatible API origin. Defaults to `https://api.openai.com/v1`. |
@@ -111,7 +111,7 @@ If `NIGHTSCOUT_URL` and `NIGHTSCOUT_TOKEN` are set, the workout screen reads the
 GET {NIGHTSCOUT_URL}/api/v1/entries.json?token=...&count=1
 ```
 
-That request is a GET. Steady never writes to Nightscout or to Loop. If Nightscout is not configured or cannot be reached, the glucose card is hidden. The card is a reading and a trend only. Under about 120 mg/dL, and only while cardio is still ahead, it adds one line: have a low snack handy. It does not suggest insulin doses. Carbs for a meal are shown so they can be typed into Loop by hand.
+That request is a GET. Steady never writes to Nightscout or to Loop. If Nightscout is not configured or cannot be reached, the glucose card is hidden and Settings says why. A reading older than 15 minutes still shows, marked as older than 15 minutes. The card is a reading and a trend only. Under about 120 mg/dL, and only while cardio is still ahead, it adds one line: have a low snack handy. It does not suggest insulin doses. Carbs for a meal are shown so they can be typed into Loop by hand.
 
 ## Meal estimates
 
