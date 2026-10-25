@@ -60,32 +60,11 @@ h2 { font-size: 15px; font-weight: 600; letter-spacing: -0.01em; line-height: 20
 
 .shell { min-height: 100dvh; }
 
-/* Opaque cap over the status bar. A couple of pixels past the inset keep the island edge from feathering the first line. */
-.safe-top {
-  position: fixed;
-  top: 0;
-  left: 0;
-  right: 0;
-  height: calc(env(safe-area-inset-top, 0px) + 2px);
-  background-color: var(--bg);
-  background-image: none;
-  opacity: 1;
-  z-index: 30;
-  pointer-events: none;
-  overflow: hidden;
-  line-height: 0;
-  box-shadow: none;
-  filter: none;
-  backdrop-filter: none;
-  -webkit-backdrop-filter: none;
-  mask-image: none;
-  -webkit-mask-image: none;
-}
 .main {
   width: min(480px, 100%);
   margin: 0 auto;
   padding:
-    calc(env(safe-area-inset-top, 0px) + 12px)
+    14px
     max(16px, env(safe-area-inset-right, 0px))
     calc(52px + env(safe-area-inset-bottom, 0px))
     max(16px, env(safe-area-inset-left, 0px));
@@ -138,7 +117,7 @@ body.logging .main { padding-bottom: calc(168px + env(safe-area-inset-bottom)); 
   display: grid;
   place-items: center;
   padding:
-    calc(env(safe-area-inset-top, 0px) + 24px)
+    24px
     max(16px, env(safe-area-inset-right, 0px))
     max(24px, env(safe-area-inset-bottom, 0px))
     max(16px, env(safe-area-inset-left, 0px));
@@ -512,10 +491,10 @@ textarea { min-height: 88px; resize: vertical; }
 .timer-chip i { width: 7px; height: 7px; border-radius: 4px; background: var(--accent); }
 .timer-chip.slim { padding: 5px 10px; font-size: 12px; }
 
-#glucose { scroll-margin-top: calc(env(safe-area-inset-top, 0px) + 64px); }
+#glucose { scroll-margin-top: 60px; }
 .glucose-pin {
   position: fixed;
-  top: calc(env(safe-area-inset-top, 0px) + 2px);
+  top: 0;
   left: 0;
   right: 0;
   z-index: 28;
@@ -533,10 +512,10 @@ textarea { min-height: 88px; resize: vertical; }
   -webkit-backdrop-filter: none;
   border-bottom: 1px solid transparent;
   opacity: 0;
-  transform: translateY(-14px);
+  transform: none;
   visibility: hidden;
   pointer-events: none;
-  transition: opacity 180ms ease, transform 180ms ease, visibility 0s linear 180ms;
+  transition: opacity 180ms ease, visibility 0s linear 180ms;
 }
 .glucose-pin.on {
   opacity: 1;
@@ -544,7 +523,7 @@ textarea { min-height: 88px; resize: vertical; }
   visibility: visible;
   pointer-events: auto;
   border-bottom-color: var(--line);
-  transition: opacity 180ms ease, transform 180ms ease, visibility 0s linear 0s;
+  transition: opacity 180ms ease, visibility 0s linear 0s;
 }
 .glucose-pin-row {
   width: min(448px, 100%);

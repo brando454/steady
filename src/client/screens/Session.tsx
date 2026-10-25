@@ -322,12 +322,10 @@ export function SessionScreen({ sessionId }: { sessionId: string }) {
     let stop = false;
     const pinIfClear = () => {
       if (stop) return;
-      const safe = document.querySelector(".safe-top")?.getBoundingClientRect().height ?? 0;
-      setGlucosePinned(card.getBoundingClientRect().bottom <= safe + 4);
+      setGlucosePinned(card.getBoundingClientRect().bottom <= 4);
     };
-    const safe = document.querySelector(".safe-top")?.getBoundingClientRect().height ?? 0;
     const observer = new IntersectionObserver(pinIfClear, {
-      rootMargin: `-${Math.ceil(safe + 4)}px 0px 0px 0px`,
+      rootMargin: "-4px 0px 0px 0px",
       threshold: [0, 0.25, 0.5, 0.75, 1],
     });
     observer.observe(card);
