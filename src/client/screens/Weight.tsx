@@ -65,7 +65,11 @@ export function WeightScreen() {
             <div className="split-head">
               <div>
                 <p className="quiet">7-day average</p>
-                <p className="figure">{data.average == null ? "—" : `${data.average.toFixed(1)} lb`}</p>
+                {data.average == null ? (
+                  <p className="quiet">Log a few mornings to see your average</p>
+                ) : (
+                  <p className="figure">{data.average.toFixed(1)} lb</p>
+                )}
               </div>
               {change && <p className="quiet">{change}</p>}
             </div>

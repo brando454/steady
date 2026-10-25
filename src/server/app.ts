@@ -235,7 +235,7 @@ export function createApp(passcode: string) {
         index: false,
         setHeaders(res, filePath) {
           if (filePath.endsWith("index.html") || filePath.endsWith("sw.js") || filePath.endsWith(".webmanifest")) {
-            res.setHeader("Cache-Control", "no-cache");
+            res.setHeader("Cache-Control", "no-store");
           }
         },
       }),
@@ -245,7 +245,7 @@ export function createApp(passcode: string) {
         next();
         return;
       }
-      res.setHeader("Cache-Control", "no-cache");
+      res.setHeader("Cache-Control", "no-store");
       res.sendFile(path.join(client, "index.html"));
     });
   }
