@@ -24,12 +24,43 @@ function clock(total: number): string {
 function fromSet(set: SetDTO, exercise: SessionExerciseDTO): Draft {
   const minutes =
     set.durationSec != null ? String(Math.round(set.durationSec / 60)) : exercise.cardioMin != null ? String(exercise.cardioMin) : "";
+  const weight =
+    set.weightLb != null
+      ? String(set.weightLb)
+      : !exercise.isCardio && exercise.lastWeightLb != null
+        ? String(exercise.lastWeightLb)
+        : "";
   return {
-    weight: set.weightLb == null ? "" : String(set.weightLb),
+    weight,
     reps: set.reps == null ? "" : String(set.reps),
     minutes,
     note: set.note ?? "",
   };
+}
+
+function sanitizeDecimal(raw: string): string {
+  let value = raw.replace(/[^\d.]/g, "");
+  const dot = value.indexOf(".");
+  if (dot >= 0) value = value.slice(0, dot + 1) + value.slice(dot + 1).replace(/\./g, "");
+  return value;
+}
+
+function commitDecimal(raw: string): string {
+  const cleaned = sanitizeDecimal(raw);
+  if (cleaned === "" || cleaned === ".") return "";
+  const number = Number(cleaned);
+  if (!Number.isFinite(number) || number < 0) return "";
+  return String(Math.round(number * 10) / 10);
+}
+
+function sanitizeInt(raw: string): string {
+  return raw.replace(/\D/g, "");
+}
+
+function commitInt(raw: string): string {
+  const digits = sanitizeInt(raw);
+  if (digits === "") return "";
+  return String(Number(digits));
 }
 
 function firstUnlogged(session: SessionDTO): string | null {
@@ -416,28 +447,47 @@ export function SessionScreen({ sessionId }: { sessionId: string }) {
                 </button>
                 <MiniStepper
                   label={exercise.isCardio ? "minutes" : "weight"}
-                  value={weightValue(exercise, set, row)}
-                  disabled={locked}
-                  onStep={(delta) => {
+                  value={exercise.isCardio ? (row?.minutes ?? "") : (row?.weight ?? "")}
+                  display={weightValue(exercise, set, row)}
+                  disabled={locked || !row}
+                  decimal={!exercise.isCardio}
+                  placeholder="—"
+                  onFocus={select}
+                  onCommit={(next) => {
+                    if (!row) return;
+                    select();
+                    if (exercise.isCardio) changeDraft(exercise, set.id, { ...row, minutes: next });
+                    else changeDraft(exercise, set.id, { ...row, weight: next });
+                  }}
+                  onStep={(delta, current) => {
                     if (!row) return;
                     select();
                     if (exercise.isCardio) {
-                      changeDraft(exercise, set.id, { ...row, minutes: stepNumber(row.minutes, delta, 1) });
+                      changeDraft(exercise, set.id, { ...row, minutes: stepNumber(current, delta, 1) });
                     } else {
-                      changeDraft(exercise, set.id, { ...row, weight: stepNumber(row.weight, delta * 5, 5) });
+                      changeDraft(exercise, set.id, { ...row, weight: stepNumber(current, delta * 5, 5) });
                     }
                   }}
                 />
                 {!exercise.isCardio && (
                   <MiniStepper
                     label={exercise.measure === "meters" ? "meters" : "reps"}
-                    value={repsValue(exercise, set, row)}
-                    disabled={locked}
-                    onStep={(delta) => {
+                    value={row?.reps ?? ""}
+                    display={repsValue(exercise, set, row)}
+                    disabled={locked || !row}
+                    suffix={exercise.measure === "meters" ? "m" : exercise.perSide ? "/side" : undefined}
+                    placeholder="—"
+                    onFocus={select}
+                    onCommit={(next) => {
+                      if (!row) return;
+                      select();
+                      changeDraft(exercise, set.id, { ...row, reps: next });
+                    }}
+                    onStep={(delta, current) => {
                       if (!row) return;
                       select();
                       const jump = exercise.measure === "meters" ? 5 : 1;
-                      changeDraft(exercise, set.id, { ...row, reps: stepNumber(row.reps, delta * jump, jump) });
+                      changeDraft(exercise, set.id, { ...row, reps: stepNumber(current, delta * jump, jump) });
                     }}
                   />
                 )}
@@ -531,21 +581,68 @@ export function SessionScreen({ sessionId }: { sessionId: string }) {
 function MiniStepper({
   label,
   value,
+  display,
   disabled,
+  decimal,
+  suffix,
+  placeholder,
+  onFocus,
+  onCommit,
   onStep,
 }: {
   label: string;
   value: string;
+  display: string;
   disabled?: boolean;
-  onStep: (delta: number) => void;
+  decimal?: boolean;
+  suffix?: string;
+  placeholder?: string;
+  onFocus?: () => void;
+  onCommit: (next: string) => void;
+  onStep: (delta: number, current: string) => void;
 }) {
+  const [text, setText] = useState(value);
+  useEffect(() => setText(value), [value]);
+  const clean = decimal ? sanitizeDecimal : sanitizeInt;
+  const commit = decimal ? commitDecimal : commitInt;
+
+  function finish(next: string) {
+    const saved = commit(next);
+    setText(saved);
+    if (saved !== value) onCommit(saved);
+  }
+
   return (
     <div className="mini-step">
-      <button type="button" aria-label={`Decrease ${label}`} disabled={disabled} onClick={() => onStep(-1)}>
+      <button type="button" aria-label={`Decrease ${label}`} disabled={disabled} onClick={() => onStep(-1, commit(text))}>
         −
       </button>
-      <strong>{value}</strong>
-      <button type="button" aria-label={`Increase ${label}`} disabled={disabled} onClick={() => onStep(1)}>
+      {disabled ? (
+        <strong>{display}</strong>
+      ) : (
+        <input
+          aria-label={label}
+          inputMode={decimal ? "decimal" : "numeric"}
+          pattern="[0-9]*"
+          enterKeyHint="done"
+          placeholder={placeholder}
+          value={text}
+          onChange={(event) => setText(clean(event.target.value))}
+          onFocus={(event) => {
+            onFocus?.();
+            event.currentTarget.select();
+          }}
+          onBlur={() => finish(text)}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") {
+              event.preventDefault();
+              event.currentTarget.blur();
+            }
+          }}
+        />
+      )}
+      {suffix && !disabled ? <span className="mini-unit">{suffix}</span> : null}
+      <button type="button" aria-label={`Increase ${label}`} disabled={disabled} onClick={() => onStep(1, commit(text))}>
         +
       </button>
     </div>

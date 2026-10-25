@@ -375,9 +375,9 @@ function historyCopy(
   measure: string,
   perSide: boolean,
   currentSessionId: string,
-): { lastTime: string; prLine: string } {
+): { lastTime: string; prLine: string; lastWeightLb: number | null } {
   const mine = history.filter((row) => row.exercise_id === exerciseId);
-  if (mine.length === 0) return { lastTime: "—", prLine: "—" };
+  if (mine.length === 0) return { lastTime: "—", prLine: "—", lastWeightLb: null };
   const previous = mine.filter((row) => row.session_id !== currentSessionId);
   const bySession = new Map<string, Perf[]>();
   let latestSession = "";
@@ -395,9 +395,19 @@ function historyCopy(
   }
   const last = latestSession ? bestSet(bySession.get(latestSession) ?? []) : null;
   const best = bestSet(mine.map((row) => ({ weightLb: num(row.weight_lb), reps: num(row.reps) })));
+  let lastWeightLb: number | null = null;
+  let lastWeightAt = -1;
+  for (const row of mine) {
+    const weight = num(row.weight_lb);
+    const at = row.logged_at.getTime();
+    if (weight == null || at < lastWeightAt) continue;
+    lastWeightAt = at;
+    lastWeightLb = weight;
+  }
   return {
     lastTime: last ? formatPerformance(last.weightLb, last.reps, measure, perSide) : "—",
     prLine: best ? formatPerformance(best.weightLb, best.reps, measure, perSide) : "—",
+    lastWeightLb,
   };
 }
 
@@ -504,6 +514,7 @@ export async function getSession(id: string): Promise<SessionDTO | null> {
       notes: exercise.notes,
       cardioMin: exercise.cardio_min,
       lastTime: copy.lastTime,
+      lastWeightLb: copy.lastWeightLb,
       prLine: copy.prLine,
       swaps: exercise.is_cardio ? [] : swapsFor(exercise.exercise_id, exercise.pattern_key, explicit, catalog),
       sets,
