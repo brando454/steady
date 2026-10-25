@@ -270,24 +270,12 @@ export function FoodScreen({ search }: { search: URLSearchParams }) {
 
   return (
     <>
-      <div className="top">
-        <h1>Food</h1>
-      </div>
-      <p className="quiet">Times are America/Boise.</p>
-      <div className="when">
-        <label className="field">
-          <span>Date</span>
-          <input type="date" value={date} onChange={(event) => setDate(event.target.value)} />
-        </label>
-        <label className="field">
-          <span>Time</span>
-          <input type="time" value={time} onChange={(event) => setTime(event.target.value.slice(0, 5))} />
-        </label>
-      </div>
+      <h1>{editing ? "Edit meal" : "Log a meal"}</h1>
       <Banner text={error} />
 
-      <div className="section-label">
-        <h2>Usual</h2>
+      <div className="fav-head">
+        <p className="quiet">Your usuals, one tap</p>
+        <p className="quiet">{editingFavs ? "Tap one to remove it" : "Swipe for more"}</p>
         <button type="button" className="linkish" onClick={() => setEditingFavs((value) => !value)}>
           {editingFavs ? "Done" : "Edit"}
         </button>
@@ -297,13 +285,11 @@ export function FoodScreen({ search }: { search: URLSearchParams }) {
           {food.favorites.map((favorite) =>
             editingFavs ? (
               <button key={favorite.id} type="button" className="chip" onClick={() => void deleteFavorite(favorite.id)}>
-                <strong>{favorite.name}</strong>
-                <small>Remove</small>
+                {favorite.name}
               </button>
             ) : (
               <button key={favorite.id} type="button" className="chip" onClick={() => void logFavorite(favorite)}>
-                <strong>{favorite.name}</strong>
-                <small>{formatInt(favorite.calories)} kcal</small>
+                {favorite.name}
               </button>
             ),
           )}
@@ -312,62 +298,62 @@ export function FoodScreen({ search }: { search: URLSearchParams }) {
         <p className="quiet">No usual meals yet.</p>
       )}
 
-      <section className="card">
-        <p className="kicker">{editing ? "Edit meal" : "Log a meal"}</p>
-        <div className={estimating ? "locked" : undefined}>
-          <input ref={fileRef} hidden type="file" accept="image/*" disabled={estimating} onChange={(event) => {
-            const file = event.target.files?.[0];
-            event.target.value = "";
-            if (file) void onPhoto(file);
-          }} />
-          <button type="button" className="secondary" disabled={estimating} onClick={() => fileRef.current?.click()}>
-            {form.photo ? "Replace photo" : "Add a photo"}
-          </button>
-          {form.photo && <img className="preview" src={form.photo} alt="" />}
-          {form.photo && (
-            <button type="button" className="ghost" disabled={estimating} onClick={() => { draft.current.photo = null; draft.current.ai = null; patch({ photo: null }); setAiImage(null); }}>
-              Remove photo
-            </button>
-          )}
-          <label className="field">
-            <span>Note</span>
-            <textarea
-              value={form.note}
-              placeholder="Portions, sauces, what was on the plate"
-              disabled={estimating}
-              onChange={(event) => {
-                draft.current.note = event.target.value;
-                patch({ note: event.target.value });
-              }}
-            />
-          </label>
-        </div>
-        <button
-          type="button"
-          className={estimating ? "secondary pending" : "secondary"}
-          disabled={estimating || !food?.aiConfigured}
-          aria-busy={estimating}
-          onClick={() => void estimate()}
-        >
-          {estimating ? (
-            <>
-              <span className="spinner" aria-hidden="true" />
-              Estimating…
-            </>
-          ) : (
-            "Estimate"
-          )}
+      <div className={estimating ? "photo-note locked" : "photo-note"}>
+        <input ref={fileRef} hidden type="file" accept="image/*" disabled={estimating} onChange={(event) => {
+          const file = event.target.files?.[0];
+          event.target.value = "";
+          if (file) void onPhoto(file);
+        }} />
+        <button type="button" className="photo-tile" disabled={estimating} onClick={() => fileRef.current?.click()}>
+          {form.photo ? <img src={form.photo} alt="" /> : <span>Photo</span>}
         </button>
-        {estimateError && (
-          <div className="inline-error" role="alert">
-            <p>{estimateError}</p>
-            <button type="button" className="linkish" onClick={() => void estimate()}>
-              Try again
-            </button>
-          </div>
+        <textarea
+          value={form.note}
+          placeholder="About 1.5 cups jasmine rice, 6 oz beef, light teriyaki"
+          disabled={estimating}
+          onChange={(event) => {
+            draft.current.note = event.target.value;
+            patch({ note: event.target.value });
+          }}
+        />
+      </div>
+      {form.photo && (
+        <button type="button" className="linkish" disabled={estimating} onClick={() => { draft.current.photo = null; draft.current.ai = null; patch({ photo: null }); setAiImage(null); }}>
+          Remove photo
+        </button>
+      )}
+      <p className="quiet">Add a photo, a note, or both. The note fills in what the camera can&apos;t see, like portions or sauce.</p>
+      <button
+        type="button"
+        className={estimating ? "secondary pending" : "secondary"}
+        disabled={estimating || !food?.aiConfigured}
+        aria-busy={estimating}
+        onClick={() => void estimate()}
+      >
+        {estimating ? (
+          <>
+            <span className="spinner" aria-hidden="true" />
+            Estimating…
+          </>
+        ) : (
+          "Estimate"
         )}
-        {food && !food.aiConfigured && <p className="quiet">No AI key is set. Enter the meal yourself.</p>}
+      </button>
+      {estimateError && (
+        <div className="inline-error" role="alert">
+          <p>{estimateError}</p>
+          <button type="button" className="linkish" onClick={() => void estimate()}>
+            Try again
+          </button>
+        </div>
+      )}
+      {food && !food.aiConfigured && <p className="quiet">No AI key is set. Enter the meal yourself.</p>}
 
+      <section className="card">
+        <div className="split-head">
+          <h2>{form.name.trim() || "Meal"}</h2>
+          <p className="quiet">Estimate, edit anything</p>
+        </div>
         <label className="field">
           <span>Name</span>
           <input value={form.name} onChange={(event) => patch({ name: event.target.value })} />
@@ -390,43 +376,56 @@ export function FoodScreen({ search }: { search: URLSearchParams }) {
             <input inputMode="decimal" value={form.fat} onChange={(event) => patch({ fat: event.target.value })} />
           </label>
         </div>
-        <aside className="loop">
-          <span className="kicker">For Loop</span>
-          <strong>{carbs == null ? "—" : formatQty(carbs)}</strong>
-          <span>g carbs</span>
-          <p>You enter it in Loop</p>
-        </aside>
-        <div className="split">
-          <button type="button" className="secondary" disabled={busy || estimating} onClick={() => void saveFavorite()}>
-            Save as usual
-          </button>
-          <button type="button" className="primary" disabled={busy || estimating} onClick={() => void logMeal()}>
-            {editing ? "Save changes" : "Log meal"}
-          </button>
-        </div>
-        {editing && (
-          <button type="button" className="ghost" onClick={() => setRemoveId(editId)}>
-            Delete meal
-          </button>
-        )}
       </section>
-
-      <h2>Logged</h2>
-      {food && food.meals.length === 0 && <p className="quiet">Nothing logged for this day.</p>}
-      {food?.meals.map((meal) => (
-        <div key={meal.id} className="meal">
-          <button type="button" className="ex-name" onClick={() => go(`/food?edit=${meal.id}&date=${meal.date}`)}>
-            <strong>{meal.name}</strong>
-            <small className="quiet">
-              {meal.timeLabel} · {formatInt(meal.calories)} kcal · {formatQty(meal.protein)} protein
-            </small>
-          </button>
-          {meal.photo && <img className="thumb" src={meal.photo} alt="" />}
-          <button type="button" className="linkish" onClick={() => setRemoveId(meal.id)}>
-            Delete
-          </button>
+      <section className="card loop">
+        <div>
+          <p className="quiet">For Loop</p>
+          <strong>{carbs == null ? "—" : `${formatQty(carbs)} g carbs`}</strong>
         </div>
-      ))}
+        <p className="quiet">You enter it in Loop</p>
+      </section>
+      <div className="split">
+        <button type="button" className="secondary" disabled={busy || estimating} onClick={() => void saveFavorite()}>
+          Save as usual
+        </button>
+        <button type="button" className="primary" disabled={busy || estimating} onClick={() => void logMeal()}>
+          {editing ? "Save changes" : "Log meal"}
+        </button>
+      </div>
+      {editing && (
+        <button type="button" className="ghost" onClick={() => setRemoveId(editId)}>
+          Delete meal
+        </button>
+      )}
+      <div className="when">
+        <label className="field">
+          <span>Date</span>
+          <input type="date" value={date} onChange={(event) => setDate(event.target.value)} />
+        </label>
+        <label className="field">
+          <span>Time</span>
+          <input type="time" value={time} onChange={(event) => setTime(event.target.value.slice(0, 5))} />
+        </label>
+      </div>
+
+      <section className="card">
+        <h2>Logged</h2>
+        {food && food.meals.length === 0 && <p className="quiet">Nothing logged for this day.</p>}
+        {food?.meals.map((meal) => (
+          <div key={meal.id} className="meal-row">
+            <button type="button" className="meal-open" onClick={() => go(`/food?edit=${meal.id}&date=${meal.date}`)}>
+              <span className="meal-name">{meal.name}</span>
+              <small className="quiet">
+                {meal.timeLabel} · {formatInt(meal.calories)} kcal, {formatQty(meal.protein)} g protein
+              </small>
+            </button>
+            {meal.photo && <img className="thumb" src={meal.photo} alt="" />}
+            <button type="button" className="linkish" onClick={() => setRemoveId(meal.id)}>
+              Delete
+            </button>
+          </div>
+        ))}
+      </section>
 
       {removeId && (
         <Confirm

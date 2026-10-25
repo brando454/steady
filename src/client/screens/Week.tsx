@@ -54,7 +54,7 @@ export function WeekScreen({ dayId }: { dayId?: string }) {
           <p>That day isn&apos;t in this week.</p>
         ) : (
           <>
-            <p className="kicker">{day.suggested ? "Suggested" : day.status === "done" ? `Done ${day.doneWeekday ?? ""}`.trim() : "This week"}</p>
+            <p className="quiet">{day.suggested ? "Up next" : day.status === "done" ? `Done ${day.doneWeekday ?? ""}`.trim() : "This week"}</p>
             <h1>{day.name}</h1>
             <p className="quiet">{day.summary}</p>
             {week.rampNote && <p className="ramp">{week.rampNote}</p>}
@@ -77,44 +77,59 @@ export function WeekScreen({ dayId }: { dayId?: string }) {
     );
   }
 
+  const next = week.days.find((item) => item.suggested) ?? week.days.find((item) => item.status !== "done") ?? null;
+  const startName = next ? (next.status === "in_progress" ? `Resume ${next.name}` : `Start ${next.name}`) : null;
+
   return (
     <>
-      <div className="top">
-        <span>{week.rangeLabel}</span>
-        <strong>
-          {week.doneCount} of {week.total}
-        </strong>
+      <div className="top title-row">
+        <h1>This week</h1>
+        <span>
+          {week.doneCount} of {week.total} done
+        </span>
       </div>
-      <h1>This week</h1>
       <Banner text={error} />
       <div className="progress" aria-hidden="true">
         {week.days.map((item) => (
           <i key={item.id} className={item.status === "done" ? "on" : ""} />
         ))}
       </div>
-      {week.rampNote && <p className="ramp">{week.rampNote}</p>}
-      <p className="quiet">The week starts Monday. Unfinished days roll off and don&apos;t pile up.</p>
-      {week.days.map((item) => (
-        <button
-          key={item.id}
-          type="button"
-          className={item.suggested ? "day suggested" : "day"}
-          onClick={() => go(`/workout/day/${item.id}`)}
-        >
-          <strong>{item.name}</strong>
-          <div className="status">
-            {item.status === "done"
+      {week.rampNote && <p className="quiet ramp-line">{week.rampNote}</p>}
+      <section className="card day-list">
+        {week.days.map((item) => {
+          const status =
+            item.status === "done"
               ? `Done ${item.doneWeekday ?? ""}`.trim()
               : item.status === "in_progress"
                 ? "In progress"
                 : item.suggested
-                  ? "Suggested"
-                  : "Not started"}
-          </div>
+                  ? "Up next"
+                  : "";
+          return (
+            <button
+              key={item.id}
+              type="button"
+              className={item.suggested ? "day-row next" : item.status === "done" ? "day-row done" : "day-row"}
+              onClick={() => go(`/workout/day/${item.id}`)}
+            >
+              <span>
+                <strong>{item.name}</strong>
+                <small className="quiet">{item.summary}</small>
+              </span>
+              <span className="status">{status}</span>
+            </button>
+          );
+        })}
+        <p className="quiet">Tap any day to start it or see its exercises. Order is up to you, and unfinished days roll off when the week ends.</p>
+      </section>
+      {next && startName && (
+        <button type="button" className="primary" disabled={busy} onClick={() => start(next.id)}>
+          {startName}
         </button>
-      ))}
-      <div className="stack">
-        <button type="button" className="secondary" onClick={() => go("/history")}>
+      )}
+      <div className="history-link">
+        <span className="quiet">Recent sessions and PRs</span>
+        <button type="button" className="pill" onClick={() => go("/history")}>
           History
         </button>
       </div>

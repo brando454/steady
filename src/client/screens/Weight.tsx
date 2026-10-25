@@ -47,33 +47,52 @@ export function WeightScreen() {
   }
 
   const change =
-    data?.change == null ? null : `${data.change > 0 ? "+" : ""}${data.change.toFixed(1)} lb vs the prior 7 days`;
+    data?.change == null
+      ? null
+      : Math.abs(data.change) < 0.05
+        ? "No change this week"
+        : data.change > 0
+          ? `Up ${data.change.toFixed(1)} lb this week`
+          : `Down ${Math.abs(data.change).toFixed(1)} lb this week`;
 
   return (
     <>
-      <p className="kicker">7-day average</p>
-      <h1>{data?.average == null ? "—" : data.average.toFixed(1)}</h1>
-      <p className="quiet">{data ? `lb · ${data.count} weigh-in${data.count === 1 ? "" : "s"}` : "Loading…"}</p>
+      <h1>Weight</h1>
       <Banner text={error} />
       {data && (
-        <section className="card">
-          <TrendChart
-            points={data.points.map((point) => ({ date: point.date, dot: point.weightLb, line: point.average }))}
-            target={data.target}
-            dotLabel="Weigh-in"
-            lineLabel="7-day average"
-          />
-          {change && <p>{change}</p>}
-          <p className={`hint ${data.hint.tone}`}>{data.hint.text}</p>
-        </section>
+        <>
+          <section className="card">
+            <div className="split-head">
+              <div>
+                <p className="quiet">7-day average</p>
+                <p className="figure">{data.average == null ? "—" : `${data.average.toFixed(1)} lb`}</p>
+              </div>
+              {change && <p className="quiet">{change}</p>}
+            </div>
+            <TrendChart
+              points={data.points.map((point) => ({ date: point.date, dot: point.weightLb, line: point.average }))}
+              target={data.target}
+              dotLabel="Daily weigh-in"
+              lineLabel="7-day average"
+            />
+            <p className="quiet">Dots are daily weigh-ins and the line is the 7-day average, so one salty dinner doesn&apos;t look like a trend.</p>
+          </section>
+          <section className="card">
+            <h2>This week&apos;s call</h2>
+            <p className="quiet">{data.hint.text}</p>
+          </section>
+        </>
       )}
-      <label className="field">
-        <span>Today&apos;s weight</span>
-        <input className="hero-input" inputMode="decimal" value={weight} onChange={(event) => setWeight(event.target.value)} />
-      </label>
-      <button type="button" className="primary" disabled={busy || weight.trim() === ""} onClick={() => void save()}>
-        Save
-      </button>
+      {!data && !error && <p className="quiet">Loading…</p>}
+      <div className="save-row">
+        <label className="field">
+          <span>This morning</span>
+          <input inputMode="decimal" value={weight} onChange={(event) => setWeight(event.target.value)} />
+        </label>
+        <button type="button" className="primary" disabled={busy || weight.trim() === ""} onClick={() => void save()}>
+          Save
+        </button>
+      </div>
     </>
   );
 }

@@ -104,6 +104,7 @@ export type TodayDTO = {
     status: "todo" | "in_progress" | "done";
     sessionId: string | null;
     rampNote: string | null;
+    summary: string;
     lines: string[];
   };
   weekDone: number;

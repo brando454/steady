@@ -25,22 +25,29 @@ export function HistoryScreen() {
   return (
     <>
       <Back to="/workout" label="This week" />
+      <p className="quiet">Recent sessions</p>
       <h1>History</h1>
       <Banner text={error} />
       {!items && !error && <p className="quiet">Loading…</p>}
       {items && items.length === 0 && <p className="quiet">No workouts yet.</p>}
-      {items?.map((item) => (
-        <button key={item.id} type="button" className="hist" onClick={() => go(`/workout/session/${item.id}`)}>
-          <strong>{item.name}</strong>
-          <div className="quiet">
-            {item.weekday} · {item.dateLabel}
-          </div>
-          <div className="quiet">
-            {item.durationLabel}
-            {item.prCount > 0 ? ` · ${item.prCount} PR${item.prCount === 1 ? "" : "s"}` : ""}
-          </div>
-        </button>
-      ))}
+      {items && items.length > 0 && (
+        <section className="card list-card">
+          {items.map((item) => (
+            <button key={item.id} type="button" className="meal-row" onClick={() => go(`/workout/session/${item.id}`)}>
+              <span>
+                <span className="meal-name">{item.name}</span>
+                <small className="quiet">
+                  {item.weekday} · {item.dateLabel}
+                </small>
+              </span>
+              <small className="quiet meal-side">
+                {item.durationLabel}
+                {item.prCount > 0 ? ` · ${item.prCount} PR${item.prCount === 1 ? "" : "s"}` : ""}
+              </small>
+            </button>
+          ))}
+        </section>
+      )}
     </>
   );
 }
@@ -72,12 +79,17 @@ export function ExerciseScreen({ exerciseId, from }: { exerciseId: string; from:
       {!data && !error && <p className="quiet">Loading…</p>}
       {data && (
         <>
-          <p className="kicker">Best set</p>
+          <p className="quiet">History</p>
           <h1>{data.name}</h1>
-          <p className="hero-sm">{data.best?.label ?? "—"}</p>
-          {data.best?.e1rm != null && <p className="quiet">Estimated 1RM {data.best.e1rm} lb</p>}
-          {data.best?.dateLabel && <p className="quiet">{data.best.dateLabel}</p>}
           <section className="card">
+            <div className="split-head">
+              <div>
+                <p className="quiet">Best set</p>
+                <p className="figure">{data.best?.label ?? "—"}</p>
+              </div>
+              {data.best?.dateLabel && <p className="quiet">{data.best.dateLabel}</p>}
+            </div>
+            {data.best?.e1rm != null && <p className="quiet">Estimated 1RM {data.best.e1rm} lb</p>}
             {data.series.length === 0 ? (
               <p className="quiet">No sets logged yet.</p>
             ) : (
@@ -86,25 +98,24 @@ export function ExerciseScreen({ exerciseId, from }: { exerciseId: string; from:
                 dotLabel={data.chartLabel}
               />
             )}
+            <p className="quiet">Top set each session.</p>
           </section>
-          <h2>Recent sessions</h2>
-          {data.sessions.length === 0 && <p className="quiet">Nothing yet.</p>}
-          {data.sessions.map((session) => (
-            <section className="card" key={session.sessionId}>
-              <button type="button" className="ex-name" onClick={() => go(`/workout/session/${session.sessionId}`)}>
-                {session.dateLabel}
-              </button>
-              <p className="quiet">{session.workoutName}</p>
-              <ul className="sets">
-                {session.sets.map((set, index) => (
-                  <li key={`${session.sessionId}-${index}`}>
-                    <span>{set.label}</span>
-                    {set.isPr && <span className="pr">PR</span>}
-                  </li>
-                ))}
-              </ul>
-            </section>
-          ))}
+          <section className="card list-card">
+            {data.sessions.length === 0 && <p className="quiet">Nothing yet.</p>}
+            {data.sessions.map((session) => {
+              const top = session.sets[0];
+              const pr = session.sets.some((set) => set.isPr);
+              return (
+                <button key={session.sessionId} type="button" className="meal-row" onClick={() => go(`/workout/session/${session.sessionId}`)}>
+                  <span>
+                    <span className="meal-name">{top?.label ?? session.workoutName}</span>
+                    <small className="quiet">{session.dateLabel}</small>
+                  </span>
+                  <small className="quiet meal-side">{pr ? "PR" : session.workoutName}</small>
+                </button>
+              );
+            })}
+          </section>
         </>
       )}
     </>

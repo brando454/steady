@@ -8,7 +8,6 @@ export function SwapScreen({ sessionId, sxId }: { sessionId: string; sxId: strin
   const [session, setSession] = useState<SessionDTO | null>(null);
   const [picked, setPicked] = useState<string | null>(null);
   const [custom, setCustom] = useState("");
-  const [scope, setScope] = useState<"today" | "default">("today");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -28,7 +27,7 @@ export function SwapScreen({ sessionId, sxId }: { sessionId: string; sxId: strin
 
   const exercise = session?.exercises.find((item) => item.id === sxId);
 
-  async function apply() {
+  async function apply(nextScope: "today" | "default") {
     if (!exercise) return;
     setBusy(true);
     setError(null);
@@ -37,9 +36,9 @@ export function SwapScreen({ sessionId, sxId }: { sessionId: string; sxId: strin
         method: "POST",
         body: JSON.stringify({
           sessionExerciseId: sxId,
-          exerciseId: custom.trim() ? undefined : picked,
+          exerciseId: custom.trim() ? undefined : picked ?? exercise.swaps[0]?.id,
           customName: custom.trim() || undefined,
-          scope,
+          scope: nextScope,
         }),
       });
       go(`/workout/session/${sessionId}`, { replace: true });
@@ -52,45 +51,40 @@ export function SwapScreen({ sessionId, sxId }: { sessionId: string; sxId: strin
   return (
     <>
       <Back to={`/workout/session/${sessionId}`} label="Workout" />
-      <p className="kicker">Swap</p>
-      <h1>{exercise?.name ?? "Exercise"}</h1>
-      {exercise && (
-        <p className="quiet">
-          {exercise.muscles}. History stays with the exercise you actually do.
-        </p>
-      )}
+      <p className="quiet">Rack&apos;s taken?</p>
+      <h1>Swap {exercise?.name ?? "exercise"}</h1>
       <Banner text={error} />
       {!session && !error && <p className="quiet">Loading…</p>}
       {exercise && (
         <>
-          {exercise.swaps.map((swap) => (
-            <button
-              key={swap.id}
-              type="button"
-              className={!custom.trim() && picked === swap.id ? "swap-opt on" : "swap-opt"}
-              onClick={() => setPicked(swap.id)}
-            >
-              <strong>{swap.name}</strong>
-            </button>
-          ))}
-          <label className="field">
-            <span>Or type any exercise</span>
-            <input value={custom} onChange={(event) => setCustom(event.target.value)} placeholder="Exercise name" />
-          </label>
-          {custom.trim() && <p className="quiet">Using the name you typed.</p>}
-          <button type="button" className={scope === "today" ? "choice on" : "choice"} onClick={() => setScope("today")}>
-            <input type="radio" name="scope" checked={scope === "today"} onChange={() => setScope("today")} />
-            <span>Just today</span>
-          </button>
-          <button type="button" className={scope === "default" ? "choice on" : "choice"} onClick={() => setScope("default")}>
-            <input type="radio" name="scope" checked={scope === "default"} onChange={() => setScope("default")} />
-            <span>Make it the default</span>
-          </button>
-          <div className="stack">
-            <button type="button" className="primary" disabled={busy || (!picked && !custom.trim())} onClick={() => void apply()}>
-              Use this exercise
-            </button>
-          </div>
+          <section className="card swap-list">
+            {exercise.swaps.map((swap, index) => (
+              <button
+                key={swap.id}
+                type="button"
+                className={!custom.trim() && (picked === swap.id || (picked == null && index === 0)) ? "swap-opt on" : "swap-opt"}
+                onClick={() => {
+                  setPicked(swap.id);
+                  setCustom("");
+                }}
+              >
+                <strong>{swap.name}</strong>
+                <small className="quiet">{swap.id === exercise.swaps[0]?.id ? "Closest match" : exercise.muscles}</small>
+              </button>
+            ))}
+            <input value={custom} onChange={(event) => setCustom(event.target.value)} placeholder="Or type any exercise" />
+          </section>
+          <section className="card">
+            <div className="split">
+              <button type="button" className="primary" disabled={busy || (!picked && !custom.trim() && exercise.swaps.length === 0)} onClick={() => void apply("today")}>
+                Just today
+              </button>
+              <button type="button" className="secondary" disabled={busy || (!picked && !custom.trim() && exercise.swaps.length === 0)} onClick={() => void apply("default")}>
+                Make it the default
+              </button>
+            </div>
+            <p className="quiet">Sets, reps, and targets carry over, and your history keeps each exercise separate.</p>
+          </section>
         </>
       )}
     </>

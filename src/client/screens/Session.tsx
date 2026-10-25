@@ -1,8 +1,7 @@
 import { useEffect, useRef, useState, type MutableRefObject } from "react";
 import { api, messageOf } from "../api";
-import { formatPerformance } from "../../shared/format";
 import type { GlucoseDTO, SessionDTO, SessionExerciseDTO, SetDTO } from "../../shared/types";
-import { Back, Banner, Confirm, useNav, useNow } from "../ui";
+import { Back, Banner, Confirm, TrendArrow, useNav, useNow } from "../ui";
 
 type Draft = { weight: string; reps: string; minutes: string; note: string };
 type Rest = { ends: number };
@@ -57,13 +56,20 @@ function stepNumber(current: string, delta: number, emptyPlus: number): string {
   return String(Math.round(next * 10) / 10);
 }
 
-function plannedText(exercise: SessionExerciseDTO, set: SetDTO, draft: Draft | undefined): string {
-  if (set.loggedAt) return set.label;
-  if (!draft) return "—";
-  if (exercise.isCardio) return draft.minutes ? `${draft.minutes} min` : "—";
-  const weight = draft.weight === "" ? null : Number(draft.weight);
-  const reps = draft.reps === "" ? null : Number(draft.reps);
-  return formatPerformance(weight, reps, exercise.measure, exercise.perSide);
+function weightValue(exercise: SessionExerciseDTO, set: SetDTO, draft: Draft | undefined): string {
+  if (exercise.isCardio) {
+    if (set.loggedAt) return set.durationSec == null ? "—" : String(Math.round(set.durationSec / 60));
+    return draft?.minutes || "—";
+  }
+  if (set.loggedAt) return set.weightLb == null ? "—" : String(set.weightLb);
+  return !draft || draft.weight === "" ? "—" : draft.weight;
+}
+
+function repsValue(exercise: SessionExerciseDTO, set: SetDTO, draft: Draft | undefined): string {
+  const reps = set.loggedAt ? (set.reps == null ? "" : String(set.reps)) : draft?.reps ?? "";
+  if (reps === "") return exercise.measure === "meters" ? "— m" : "x—";
+  if (exercise.measure === "meters") return `${reps} m`;
+  return exercise.perSide ? `x${reps} /side` : `x${reps}`;
 }
 
 export function SessionScreen({ sessionId }: { sessionId: string }) {
@@ -271,7 +277,7 @@ export function SessionScreen({ sessionId }: { sessionId: string }) {
   const low = Boolean(glucose?.available && glucose.mgdl != null && glucose.mgdl < 120 && cardioLeft);
   const mgdl = reading?.mgdl;
   const glucoseTone = mgdl == null ? "" : mgdl < 120 ? " low" : mgdl > 180 ? " high" : "";
-  const snack = "Before cardio, a low snack handy is a good idea under about 120.";
+  const snack = "Under 120 with cardio ahead, grab a quick snack";
   const canLog = Boolean(
     draft &&
       (current?.exercise.isCardio
@@ -317,58 +323,61 @@ export function SessionScreen({ sessionId }: { sessionId: string }) {
 
   return (
     <>
-      <div className="session-top">
+      <div className="session-tools">
         <Back to={session.dayId ? `/workout/day/${session.dayId}` : "/workout"} label="Back" />
-        <div className="head-actions">
-          {reading && (
-            <button type="button" className="chip-mini" onClick={() => document.getElementById("glucose")?.scrollIntoView({ behavior: "smooth" })}>
-              {reading.mgdl} {reading.arrow}
-            </button>
-          )}
-          {!finished && (
-            <button type="button" className="linkish" onClick={() => setAsk("finish")}>
-              Finish
-            </button>
-          )}
-        </div>
+        {!finished && (
+          <button type="button" className="linkish" onClick={() => setAsk("finish")}>
+            Finish
+          </button>
+        )}
       </div>
-      <p className="kicker">{finished ? "Finished" : "In progress"}</p>
-      <div className="session-top">
-        <h1>{session.name}</h1>
-        <div className="elapsed">{elapsedLabel(session.startedAt, endMs)}</div>
+      <div className="session-title">
+        <div>
+          <p className="quiet">{finished ? "Finished" : "In progress"}</p>
+          <h1>{session.name}</h1>
+        </div>
+        <div className="timer-chip">
+          <i />
+          {elapsedLabel(session.startedAt, endMs)}
+        </div>
       </div>
       {session.rampNote && <p className="ramp">{session.rampNote}</p>}
       <Banner text={error} />
 
       {reading && (
-        <section className="card" id="glucose" ref={glucoseCard}>
-          <p className="kicker">Glucose</p>
+        <section className={`card glucose-card${glucoseTone}`} id="glucose" ref={glucoseCard}>
+          <div className="split-head">
+            <p className="quiet">Glucose from Nightscout</p>
+            <p className="quiet">{reading.minutesAgo === 0 ? "just now" : `${reading.minutesAgo} min ago`}</p>
+          </div>
           <p className="glucose-num">
-            {reading.mgdl}
-            <span>{reading.arrow}</span>
+            <strong>{reading.mgdl}</strong>
+            <span className="unit">mg/dL</span>
+            <TrendArrow arrow={reading.arrow} />
           </p>
-          <p className="quiet">
-            {reading.label} · {reading.minutesAgo === 0 ? "just now" : `${reading.minutesAgo} min ago`} · mg/dL
-          </p>
+          <p className="quiet">{reading.label}</p>
           {!reading.available && reading.reason === "stale" && <p className="quiet">Older than 15 minutes.</p>}
           {low && <p className="snack">{snack}</p>}
         </section>
       )}
       {reading && (
         <div className={`glucose-pin${glucosePinned ? " on" : ""}`} aria-hidden={glucosePinned ? undefined : true}>
-          <div className={`glucose-pin-bar${glucoseTone}`}>
+          <div className="glucose-pin-row">
             <button
               type="button"
-              className="glucose-pill"
+              className={`glucose-pill${glucoseTone}`}
               tabIndex={glucosePinned ? 0 : -1}
               onClick={() => document.getElementById("glucose")?.scrollIntoView({ behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" })}
             >
               <strong>{reading.mgdl}</strong>
-              <span className="unit">mg/dL</span>
-              {reading.arrow && reading.arrow !== "·" ? <span className="arrow">{reading.arrow}</span> : null}
-              <span className="ago">{reading.minutesAgo === 0 ? "now" : `${reading.minutesAgo} min`}</span>
+              <TrendArrow arrow={reading.arrow} />
+              <span className="ago">{reading.minutesAgo === 0 ? "now" : `${reading.minutesAgo}m`}</span>
             </button>
-            <div className="glucose-pin-time">{elapsedLabel(session.startedAt, endMs)}</div>
+            <div className="glucose-pin-name">{session.name}</div>
+            <div className="timer-chip slim">
+              <i />
+              {elapsedLabel(session.startedAt, endMs)}
+            </div>
           </div>
         </div>
       )}
@@ -376,46 +385,77 @@ export function SessionScreen({ sessionId }: { sessionId: string }) {
       {session.exercises.map((exercise) => (
         <section className="card" key={exercise.id}>
           <div className="ex-head">
-            <button type="button" className="ex-name" onClick={() => go(`/exercise/${exercise.exerciseId}?from=${encodeURIComponent(`/workout/session/${session.id}`)}`)}>
-              {exercise.name}
-            </button>
+            <div>
+              <button type="button" className="ex-name" onClick={() => go(`/exercise/${exercise.exerciseId}?from=${encodeURIComponent(`/workout/session/${session.id}`)}`)}>
+                {exercise.name}
+              </button>
+              <p className="quiet">
+                {exercise.isCardio
+                  ? exercise.repsLabel
+                  : `Last time: ${exercise.lastTime}. PR ${exercise.prLine}`}
+              </p>
+            </div>
             {!finished && !exercise.isCardio && (
-              <button type="button" className="linkish" onClick={() => go(`/workout/session/${session.id}/swap/${exercise.id}`)}>
+              <button type="button" className="pill" onClick={() => go(`/workout/session/${session.id}/swap/${exercise.id}`)}>
                 Swap
               </button>
             )}
           </div>
-          <p className="quiet">{exercise.isCardio ? exercise.repsLabel : `${exercise.setsPlanned}×${exercise.repsLabel}`}</p>
-          {!exercise.isCardio && (
-            <>
-              <p className="quiet">Last time: {exercise.lastTime}</p>
-              <p className="pr-line">PR {exercise.prLine}</p>
-            </>
-          )}
           {exercise.notes && <p className="quiet">{exercise.notes}</p>}
-          {low && exercise.isCardio && exercise.sets.every((set) => !set.loggedAt) && <p className="snack">{snack}</p>}
-          {exercise.sets.map((set) => (
-            <button
-              key={set.id}
-              type="button"
-              data-set={set.id}
-              className={set.id === currentId ? "set current" : "set"}
-              onClick={() => {
-                if (!set.loggedAt && !finished) setCurrentId(set.id);
-              }}
-            >
-              <span>
-                Set {set.setIndex}
-                <span className="quiet"> · {plannedText(exercise, set, drafts[set.id])}</span>
-              </span>
-              {flash.includes(set.id) ? <span className="pr fresh">New PR</span> : set.isPr ? <span className="pr">PR</span> : null}
-            </button>
-          ))}
+          {exercise.sets.map((set) => {
+            const row = drafts[set.id];
+            const locked = Boolean(set.loggedAt) || finished;
+            const select = () => {
+              if (!locked) setCurrentId(set.id);
+            };
+            return (
+              <div key={set.id} data-set={set.id} className={set.id === currentId && !set.loggedAt ? "set-row now" : "set-row"}>
+                <button type="button" className="set-label" onClick={select}>
+                  {set.loggedAt ? `Set ${set.setIndex} done` : `Set ${set.setIndex}`}
+                  {flash.includes(set.id) ? <span className="pr fresh">New PR</span> : set.isPr ? <span className="pr">PR</span> : null}
+                </button>
+                <MiniStepper
+                  label={exercise.isCardio ? "minutes" : "weight"}
+                  value={weightValue(exercise, set, row)}
+                  disabled={locked}
+                  onStep={(delta) => {
+                    if (!row) return;
+                    select();
+                    if (exercise.isCardio) {
+                      changeDraft(exercise, set.id, { ...row, minutes: stepNumber(row.minutes, delta, 1) });
+                    } else {
+                      changeDraft(exercise, set.id, { ...row, weight: stepNumber(row.weight, delta * 5, 5) });
+                    }
+                  }}
+                />
+                {!exercise.isCardio && (
+                  <MiniStepper
+                    label={exercise.measure === "meters" ? "meters" : "reps"}
+                    value={repsValue(exercise, set, row)}
+                    disabled={locked}
+                    onStep={(delta) => {
+                      if (!row) return;
+                      select();
+                      const jump = exercise.measure === "meters" ? 5 : 1;
+                      changeDraft(exercise, set.id, { ...row, reps: stepNumber(row.reps, delta * jump, jump) });
+                    }}
+                  />
+                )}
+              </div>
+            );
+          })}
+          {!finished && exercise.isCardio && current?.exercise.id === exercise.id && draft && (
+            <label className="field">
+              <span>Note</span>
+              <textarea
+                rows={2}
+                value={draft.note}
+                onChange={(event) => changeDraft(exercise, current.set.id, { ...draft, note: event.target.value })}
+              />
+            </label>
+          )}
           {!finished && (
             <div className="row-actions">
-              <button type="button" onClick={() => mutate(`/api/session-exercises/${exercise.id}/sets`, "POST")}>
-                Add set
-              </button>
               <button
                 type="button"
                 onClick={() => {
@@ -424,6 +464,9 @@ export function SessionScreen({ sessionId }: { sessionId: string }) {
                 }}
               >
                 Remove set
+              </button>
+              <button type="button" onClick={() => mutate(`/api/session-exercises/${exercise.id}/sets`, "POST")}>
+                Add set
               </button>
             </div>
           )}
@@ -438,65 +481,24 @@ export function SessionScreen({ sessionId }: { sessionId: string }) {
 
       {!finished && (
         <div className="log-dock">
-          {rest && <RestBar rest={rest} buzzed={buzzed} onChange={setRest} />}
+          <div className="dock-rest">
+            {rest ? (
+              <RestBar rest={rest} buzzed={buzzed} onChange={setRest} />
+            ) : (
+              <>
+                <span className="quiet">Rest</span>
+                <strong className="rest-time">—</strong>
+              </>
+            )}
+          </div>
           {current && draft ? (
-            <>
-              <p className="dock-label">
-                {current.exercise.isCardio ? current.exercise.name : `Set ${current.set.setIndex} · ${current.exercise.name}`}
-              </p>
-              {current.exercise.isCardio ? (
-                <>
-                  <Stepper
-                    label="Minutes"
-                    value={draft.minutes}
-                    onStep={(delta) =>
-                      changeDraft(current.exercise, current.set.id, {
-                        ...draft,
-                        minutes: stepNumber(draft.minutes, delta, 1),
-                      })
-                    }
-                  />
-                  <label className="field">
-                    <span>Note</span>
-                    <textarea
-                      rows={2}
-                      value={draft.note}
-                      onChange={(event) => changeDraft(current.exercise, current.set.id, { ...draft, note: event.target.value })}
-                    />
-                  </label>
-                </>
-              ) : (
-                <div className="pair">
-                  <Stepper
-                    label="lb"
-                    value={draft.weight === "" ? "—" : draft.weight}
-                    onStep={(delta) =>
-                      changeDraft(current.exercise, current.set.id, {
-                        ...draft,
-                        weight: stepNumber(draft.weight, delta * 5, 5),
-                      })
-                    }
-                  />
-                  <Stepper
-                    label={current.exercise.measure === "meters" ? "m" : current.exercise.perSide ? "reps / side" : "reps"}
-                    value={draft.reps === "" ? "—" : draft.reps}
-                    onStep={(delta) =>
-                      changeDraft(current.exercise, current.set.id, {
-                        ...draft,
-                        reps: stepNumber(draft.reps, current.exercise.measure === "meters" ? delta * 5 : delta, current.exercise.measure === "meters" ? 5 : 1),
-                      })
-                    }
-                  />
-                </div>
-              )}
-              <div className="stack">
-                <button type="button" className="primary" disabled={!canLog || busy} onClick={() => void logCurrent()}>
-                  {current.exercise.isCardio ? "Log cardio" : `Log set ${current.set.setIndex}`}
-                </button>
-              </div>
-            </>
+            <button type="button" className="primary dock-log" disabled={!canLog || busy} onClick={() => void logCurrent()}>
+              {current.exercise.isCardio ? "Log cardio" : `Log set ${current.set.setIndex}`}
+            </button>
           ) : (
-            <p>All sets logged. Finish when you&apos;re done.</p>
+            <button type="button" className="primary dock-log" onClick={() => setAsk("finish")}>
+              Finish
+            </button>
           )}
         </div>
       )}
@@ -526,17 +528,24 @@ export function SessionScreen({ sessionId }: { sessionId: string }) {
   );
 }
 
-function Stepper({ label, value, onStep }: { label: string; value: string; onStep: (delta: number) => void }) {
+function MiniStepper({
+  label,
+  value,
+  disabled,
+  onStep,
+}: {
+  label: string;
+  value: string;
+  disabled?: boolean;
+  onStep: (delta: number) => void;
+}) {
   return (
-    <div className="stepper" aria-label={label}>
-      <button type="button" className="step" aria-label={`Decrease ${label}`} onClick={() => onStep(-1)}>
+    <div className="mini-step">
+      <button type="button" aria-label={`Decrease ${label}`} disabled={disabled} onClick={() => onStep(-1)}>
         −
       </button>
-      <div className="val">
-        <strong>{value}</strong>
-        <small>{label}</small>
-      </div>
-      <button type="button" className="step" aria-label={`Increase ${label}`} onClick={() => onStep(1)}>
+      <strong>{value}</strong>
+      <button type="button" aria-label={`Increase ${label}`} disabled={disabled} onClick={() => onStep(1)}>
         +
       </button>
     </div>
@@ -565,17 +574,17 @@ function RestBar({
     }
   }, [left, buzzed]);
   return (
-    <div className="rest">
-      <div>
-        <strong>{left === 0 ? "0:00" : clock(left)}</strong>
-        <div className="quiet">{left === 0 ? "Rest done" : "Rest"}</div>
-      </div>
-      <button type="button" onClick={() => onChange({ ends: Math.max(rest.ends, Date.now()) + 30_000 })}>
-        +30
-      </button>
-      <button type="button" onClick={() => onChange(null)}>
-        Skip
-      </button>
-    </div>
+    <>
+      <span className="quiet">{left === 0 ? "Rest done" : "Rest"}</span>
+      <strong className="rest-time">{left === 0 ? "0:00" : clock(left)}</strong>
+      <span className="rest-links">
+        <button type="button" onClick={() => onChange({ ends: Math.max(rest.ends, Date.now()) + 30_000 })}>
+          +30
+        </button>
+        <button type="button" onClick={() => onChange(null)}>
+          Skip
+        </button>
+      </span>
+    </>
   );
 }
