@@ -139,25 +139,6 @@ export function SessionScreen({ sessionId }: { sessionId: string }) {
   }, [currentId]);
 
   useEffect(() => {
-    const card = glucoseCard.current;
-    if (!card) return;
-    let stop = false;
-    const safe = document.querySelector(".safe-top")?.getBoundingClientRect().height ?? 0;
-    const observer = new IntersectionObserver(
-      ([entry]) => {
-        if (stop) return;
-        setGlucosePinned(!entry.isIntersecting);
-      },
-      { rootMargin: `-${Math.ceil(safe + 4)}px 0px 0px 0px`, threshold: 0 },
-    );
-    observer.observe(card);
-    return () => {
-      stop = true;
-      observer.disconnect();
-    };
-  }, [Boolean(glucose && glucose.mgdl != null && (glucose.available || glucose.reason === "stale"))]);
-
-  useEffect(() => {
     return () => {
       if (patchTimer.current) window.clearTimeout(patchTimer.current);
     };
@@ -286,6 +267,7 @@ export function SessionScreen({ sessionId }: { sessionId: string }) {
   const finished = Boolean(session?.completedAt);
   const cardioLeft = session?.exercises.some((exercise) => exercise.isCardio && exercise.sets.every((set) => !set.loggedAt));
   const reading = glucose && glucose.mgdl != null && (glucose.available || glucose.reason === "stale") ? glucose : null;
+  const showGlucose = Boolean(reading && session);
   const low = Boolean(glucose?.available && glucose.mgdl != null && glucose.mgdl < 120 && cardioLeft);
   const mgdl = reading?.mgdl;
   const glucoseTone = mgdl == null ? "" : mgdl < 120 ? " low" : mgdl > 180 ? " high" : "";
@@ -296,6 +278,30 @@ export function SessionScreen({ sessionId }: { sessionId: string }) {
         ? Number(draft.minutes) > 0
         : draft.weight !== "" && Number.isFinite(Number(draft.weight)) && Number(draft.reps) > 0),
   );
+
+  useEffect(() => {
+    const card = glucoseCard.current;
+    if (!showGlucose || !card) return;
+    let stop = false;
+    const pinIfClear = () => {
+      if (stop) return;
+      const safe = document.querySelector(".safe-top")?.getBoundingClientRect().height ?? 0;
+      setGlucosePinned(card.getBoundingClientRect().bottom <= safe + 4);
+    };
+    const safe = document.querySelector(".safe-top")?.getBoundingClientRect().height ?? 0;
+    const observer = new IntersectionObserver(pinIfClear, {
+      rootMargin: `-${Math.ceil(safe + 4)}px 0px 0px 0px`,
+      threshold: [0, 0.25, 0.5, 0.75, 1],
+    });
+    observer.observe(card);
+    pinIfClear();
+    window.addEventListener("resize", pinIfClear);
+    return () => {
+      stop = true;
+      observer.disconnect();
+      window.removeEventListener("resize", pinIfClear);
+    };
+  }, [showGlucose, session?.id]);
 
   if (!session) {
     return (
