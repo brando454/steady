@@ -54,6 +54,23 @@ export function Providers({
   );
 }
 
+export function TrendArrow({ arrow }: { arrow?: string | null }) {
+  if (!arrow || arrow === "·") return null;
+  const rotation = arrow.includes("↗") ? -45 : arrow.includes("↘") ? 45 : arrow.includes("↑") ? -90 : arrow.includes("↓") ? 90 : 0;
+  const twin = arrow.includes("↑↑") || arrow.includes("↓↓");
+  const mark = (key: string) => (
+    <svg key={key} viewBox="0 0 24 24" style={{ transform: `rotate(${rotation}deg)` }} aria-hidden="true">
+      <path d="M4 12h14M13 6l6 6-6 6" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+  return (
+    <span className={twin ? "trend twin" : "trend"}>
+      {mark("a")}
+      {twin ? mark("b") : null}
+    </span>
+  );
+}
+
 export function Ring({
   consumed,
   target,
@@ -65,22 +82,22 @@ export function Ring({
   center: string;
   caption: string;
 }) {
-  const radius = 54;
+  const radius = 46;
   const circ = 2 * Math.PI * radius;
   const pct = target > 0 ? Math.max(0, Math.min(1, consumed / target)) : 0;
   const dash = circ * pct;
   return (
     <div className="ring-wrap">
-      <svg viewBox="0 0 140 140" className="ring" aria-hidden="true">
-        <circle cx="70" cy="70" r={radius} className="ring-track" />
+      <svg viewBox="0 0 112 112" className="ring" aria-hidden="true">
+        <circle cx="56" cy="56" r={radius} className="ring-track" />
         {pct > 0 && (
           <circle
-            cx="70"
-            cy="70"
+            cx="56"
+            cy="56"
             r={radius}
             className="ring-value"
             strokeDasharray={`${dash} ${circ - dash}`}
-            transform="rotate(-90 70 70)"
+            transform="rotate(-90 56 56)"
           />
         )}
       </svg>

@@ -331,6 +331,7 @@ export async function getToday(): Promise<TodayDTO> {
           status: suggested.status,
           sessionId: suggested.sessionId,
           rampNote: week.rampNote,
+          summary: suggested.summary,
           lines: slots.map((slot) => prescriptionLine(slot.name, slot.sets, slot.reps_label, slot.is_cardio, slot.notes)),
         }
       : null,
