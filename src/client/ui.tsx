@@ -1,4 +1,5 @@
 import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import { chartScale } from "../shared/format";
 
 type Go = (to: string, opts?: { replace?: boolean }) => void;
@@ -247,7 +248,7 @@ export function Confirm({
   onCancel: () => void;
   onConfirm: () => void;
 }) {
-  return (
+  return createPortal(
     <div className="sheet-back" role="presentation" onClick={onCancel}>
       <div
         className="sheet"
@@ -267,6 +268,7 @@ export function Confirm({
           </button>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }

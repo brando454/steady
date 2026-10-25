@@ -58,7 +58,10 @@ export function App() {
   const [authed, setAuthed] = useState<boolean | null>(null);
 
   useEffect(() => {
-    const sync = () => setLoc(window.location.pathname + window.location.search);
+    const sync = () => {
+      setLoc(window.location.pathname + window.location.search);
+      document.querySelector(".main")?.scrollTo(0, 0);
+    };
     window.addEventListener("popstate", sync);
     return () => window.removeEventListener("popstate", sync);
   }, []);
@@ -70,6 +73,32 @@ export function App() {
       else window.history.pushState({}, "", to);
     }
     setLoc(window.location.pathname + window.location.search);
+    document.querySelector(".main")?.scrollTo(0, 0);
+  }, []);
+
+  useEffect(() => {
+    const intoView = () => {
+      const active = document.activeElement;
+      if (
+        !(active instanceof HTMLInputElement) &&
+        !(active instanceof HTMLTextAreaElement) &&
+        !(active instanceof HTMLSelectElement)
+      ) {
+        return;
+      }
+      window.setTimeout(() => {
+        if (document.activeElement === active) {
+          active.scrollIntoView({ block: "center", inline: "nearest" });
+        }
+      }, 300);
+    };
+    document.addEventListener("focusin", intoView);
+    const viewport = window.visualViewport;
+    viewport?.addEventListener("resize", intoView);
+    return () => {
+      document.removeEventListener("focusin", intoView);
+      viewport?.removeEventListener("resize", intoView);
+    };
   }, []);
 
   useEffect(() => {
