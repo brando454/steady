@@ -26,6 +26,7 @@ docker compose up -d
 DATABASE_URL=postgres://steady:steady@localhost:5432/steady
 APP_PASSCODE=choose-a-passcode
 COACH_API_TOKEN=choose-a-coach-token
+WIDGET_TOKEN=choose-a-widget-token
 ```
 
 `APP_PASSCODE` must be at least 4 characters. In production the app refuses the placeholders `change-me`, `steady-dev`, `password`, and `1234`.
@@ -49,6 +50,7 @@ On a laptop or in development, the first boot also inserts sample workouts, meal
 | `DATABASE_URL` | Yes | Postgres connection string. |
 | `APP_PASSCODE` | Yes | Unlocks the app once per device. |
 | `COACH_API_TOKEN` | No | Bearer token for the coach read API. If unset, that route returns 503. |
+| `WIDGET_TOKEN` | No | Bearer token for the home-screen widget. Separate from the coach token. If unset, that route returns 401. |
 | `NIGHTSCOUT_URL` | No | Nightscout site. A trailing slash, `/api/v1`, or a pasted `?token=` query is ignored. If either Nightscout variable is missing, the glucose card is hidden and Settings says which one. |
 | `NIGHTSCOUT_TOKEN` | No | Read token sent as the `token` query parameter. |
 | `AI_API_KEY` | No | Key for meal estimates. If unset, meals are entered by hand. |
@@ -63,7 +65,7 @@ On a laptop or in development, the first boot also inserts sample workouts, meal
 
 1. Push this repo to GitHub.
 2. In the Render dashboard, choose **New** → **Blueprint** and select the repo. Render reads `render.yaml`.
-3. When Render prompts for the secret env vars (`sync: false`), set `APP_PASSCODE` and, if you want them, `COACH_API_TOKEN`, `NIGHTSCOUT_URL`, `NIGHTSCOUT_TOKEN`, and `AI_API_KEY`.
+3. When Render prompts for the secret env vars (`sync: false`), set `APP_PASSCODE` and, if you want them, `COACH_API_TOKEN`, `WIDGET_TOKEN`, `NIGHTSCOUT_URL`, `NIGHTSCOUT_TOKEN`, and `AI_API_KEY`.
 4. Apply the Blueprint. The web service builds with `npm install --include=dev && npm run build` (devDependencies are required for the Vite build) and starts with `npm start`. Render's health check is `GET /health`.
 
 The web service and database are both in Oregon so they share a private network. `DATABASE_URL` is the internal connection string. The database allow list is empty, so it accepts connections from that private network only. To use `psql` from a laptop, add your IP on the database's Networking page.
@@ -103,6 +105,31 @@ curl -sS \
 
 A missing or wrong token is 401. Repeated failures are rate limited. If `COACH_API_TOKEN` is unset, the route is 503.
 
+## Home-screen widget
+
+`GET /api/widget/today`
+
+Read-only totals for today in America/Boise, the same eaten and target numbers as the Today screen. Send `Authorization: Bearer $WIDGET_TOKEN`, or `?token=` if a header is awkward. The response is `Cache-Control: no-store`. A missing or wrong token is 401, including when `WIDGET_TOKEN` is unset. Repeated failures are rate limited. This token is not the coach token.
+
+```bash
+curl -sS \
+  -H "Authorization: Bearer $WIDGET_TOKEN" \
+  "https://YOUR-SERVICE.onrender.com/api/widget/today"
+```
+
+```json
+{
+  "date": "2026-10-25",
+  "updatedAt": "2026-10-25T15:04:00.000Z",
+  "calories": { "eaten": 1000, "target": 3000, "left": 2000 },
+  "protein": { "eaten": 80, "target": 190 },
+  "carbs": { "eaten": 100, "target": 330 },
+  "fat": { "eaten": 30, "target": 85 }
+}
+```
+
+`widgets/steady-widget.js` is a Scriptable script for a small or medium home-screen widget. Paste `WIDGET_TOKEN` into `TOKEN` at the top. A tap opens the Food tab at `https://steady-re7n.onrender.com/food`. The app uses the URL path, not a hash, so `/food` is the Food tab and `/#/food` is not.
+
 ## Glucose
 
 If `NIGHTSCOUT_URL` and `NIGHTSCOUT_TOKEN` are set, the workout screen reads the latest sensor glucose about once a minute:
@@ -129,4 +156,4 @@ A personal record is a heavier weight at the same reps, or a higher estimated on
 
 ## Access
 
-The passcode is checked once. A valid login sets an HttpOnly cookie (`steady_session`) for about a year, `SameSite=Lax`, and `Secure` in production. Logging out, or "Forget this phone" in Settings, clears it. The coach token cannot be used as that cookie, and the cookie cannot call the coach API.
+The passcode is checked once. A valid login sets an HttpOnly cookie (`steady_session`) for about a year, `SameSite=Lax`, and `Secure` in production. Logging out, or "Forget this phone" in Settings, clears it. The coach token and the widget token cannot be used as that cookie, and the cookie cannot call those APIs.

@@ -13,7 +13,9 @@ import {
   suggestedDayId,
   weekDayStatuses,
   weightHint,
+  widgetToday,
 } from "../src/shared/logic";
+import { presentedWidgetToken, widgetTokenOk } from "../src/server/auth";
 import { DAYS, DEFAULT_RAMP, EXERCISES, SUBSTITUTES } from "../src/shared/program";
 import { civilDate, wallTimeToUtc, weekdayShort, weekStartCivil } from "../src/shared/time";
 
@@ -30,6 +32,37 @@ test("daily totals and remaining macros", () => {
     fat: 55,
   });
   assert.deepEqual(dailyTotals([]), { calories: 0, protein: 0, carbs: 0, fat: 0 });
+});
+
+test("widget payload uses today totals, targets, and calories left", () => {
+  const totals = dailyTotals([
+    { calories: 680, protein: 38, carbs: 72, fat: 24 },
+    { calories: 320, protein: 42, carbs: 28, fat: 6 },
+  ]);
+  const targets = { calories: 3000, protein: 190, carbs: 330, fat: 85 };
+  assert.deepEqual(widgetToday("2026-10-25", "2026-10-25T16:00:00.000Z", totals, targets), {
+    date: "2026-10-25",
+    updatedAt: "2026-10-25T16:00:00.000Z",
+    calories: { eaten: 1000, target: 3000, left: 2000 },
+    protein: { eaten: 80, target: 190 },
+    carbs: { eaten: 100, target: 330 },
+    fat: { eaten: 30, target: 85 },
+  });
+});
+
+test("widget token accepts a bearer header or a query token", () => {
+  assert.equal(presentedWidgetToken("Bearer secret", undefined), "secret");
+  assert.equal(presentedWidgetToken("bearer secret", "other"), "secret");
+  assert.equal(presentedWidgetToken("Bearer ", "from-query"), "from-query");
+  assert.equal(presentedWidgetToken(undefined, " from-query "), "from-query");
+  assert.equal(presentedWidgetToken(undefined, ["from-query"]), "from-query");
+  assert.equal(presentedWidgetToken(undefined, undefined), "");
+  assert.equal(widgetTokenOk("secret", "secret"), true);
+  assert.equal(widgetTokenOk("secret", " secret "), true);
+  assert.equal(widgetTokenOk("nope", "secret"), false);
+  assert.equal(widgetTokenOk("", "secret"), false);
+  assert.equal(widgetTokenOk("secret", ""), false);
+  assert.equal(widgetTokenOk("secret", undefined), false);
 });
 
 test("PR detection uses weight at those reps or estimated 1RM", () => {

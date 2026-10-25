@@ -9,6 +9,7 @@ import {
   dailyTotals,
   greetingFor,
   macrosLeft,
+  widgetToday,
   rampForDate,
   round1,
   sevenDayAverage,
@@ -44,6 +45,7 @@ import type {
   SetDTO,
   SettingsDTO,
   TodayDTO,
+  WidgetTodayDTO,
   WeekDTO,
   WeightDTO,
 } from "../shared/types";
@@ -296,6 +298,15 @@ export async function getWeek(): Promise<WeekDTO> {
     rampNote: rampForDate(settings.ramp, today)?.note ?? null,
     days: dto,
   };
+}
+
+export async function getWidgetToday(now = new Date()): Promise<WidgetTodayDTO> {
+  const date = civilDate(now);
+  const settings = await getSettings();
+  const meals = await mealsOn(date, false);
+  const totals = dailyTotals(meals);
+  const targets = targetsOf(settings);
+  return widgetToday(date, now.toISOString(), totals, targets);
 }
 
 export async function getToday(): Promise<TodayDTO> {
