@@ -80,6 +80,8 @@ export function SessionScreen({ sessionId }: { sessionId: string }) {
   const [ask, setAsk] = useState<null | "finish" | "discard">(null);
   const patchTimer = useRef<number | null>(null);
   const buzzed = useRef(false);
+  const glucoseCard = useRef<HTMLElement | null>(null);
+  const [glucosePinned, setGlucosePinned] = useState(false);
 
   useEffect(() => {
     let stop = false;
@@ -135,6 +137,25 @@ export function SessionScreen({ sessionId }: { sessionId: string }) {
     if (!currentId) return;
     document.querySelector(`[data-set="${currentId}"]`)?.scrollIntoView({ block: "nearest" });
   }, [currentId]);
+
+  useEffect(() => {
+    const card = glucoseCard.current;
+    if (!card) return;
+    let stop = false;
+    const safe = document.querySelector(".safe-top")?.getBoundingClientRect().height ?? 0;
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        if (stop) return;
+        setGlucosePinned(!entry.isIntersecting);
+      },
+      { rootMargin: `-${Math.ceil(safe + 4)}px 0px 0px 0px`, threshold: 0 },
+    );
+    observer.observe(card);
+    return () => {
+      stop = true;
+      observer.disconnect();
+    };
+  }, [Boolean(glucose && glucose.mgdl != null && (glucose.available || glucose.reason === "stale"))]);
 
   useEffect(() => {
     return () => {
@@ -266,6 +287,8 @@ export function SessionScreen({ sessionId }: { sessionId: string }) {
   const cardioLeft = session?.exercises.some((exercise) => exercise.isCardio && exercise.sets.every((set) => !set.loggedAt));
   const reading = glucose && glucose.mgdl != null && (glucose.available || glucose.reason === "stale") ? glucose : null;
   const low = Boolean(glucose?.available && glucose.mgdl != null && glucose.mgdl < 120 && cardioLeft);
+  const mgdl = reading?.mgdl;
+  const glucoseTone = mgdl == null ? "" : mgdl < 120 ? " low" : mgdl > 180 ? " high" : "";
   const snack = "Before cardio, a low snack handy is a good idea under about 120.";
   const canLog = Boolean(
     draft &&
@@ -312,7 +335,7 @@ export function SessionScreen({ sessionId }: { sessionId: string }) {
       <Banner text={error} />
 
       {reading && (
-        <section className="card" id="glucose">
+        <section className="card" id="glucose" ref={glucoseCard}>
           <p className="kicker">Glucose</p>
           <p className="glucose-num">
             {reading.mgdl}
@@ -324,6 +347,24 @@ export function SessionScreen({ sessionId }: { sessionId: string }) {
           {!reading.available && reading.reason === "stale" && <p className="quiet">Older than 15 minutes.</p>}
           {low && <p className="snack">{snack}</p>}
         </section>
+      )}
+      {reading && (
+        <div className={`glucose-pin${glucosePinned ? " on" : ""}`} aria-hidden={glucosePinned ? undefined : true}>
+          <div className={`glucose-pin-bar${glucoseTone}`}>
+            <button
+              type="button"
+              className="glucose-pill"
+              tabIndex={glucosePinned ? 0 : -1}
+              onClick={() => document.getElementById("glucose")?.scrollIntoView({ behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" })}
+            >
+              <strong>{reading.mgdl}</strong>
+              <span className="unit">mg/dL</span>
+              {reading.arrow && reading.arrow !== "·" ? <span className="arrow">{reading.arrow}</span> : null}
+              <span className="ago">{reading.minutesAgo === 0 ? "now" : `${reading.minutesAgo} min`}</span>
+            </button>
+            <div className="glucose-pin-time">{elapsedLabel(session.startedAt, endMs)}</div>
+          </div>
+        </div>
       )}
 
       {session.exercises.map((exercise) => (
