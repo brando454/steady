@@ -111,7 +111,7 @@ If `NIGHTSCOUT_URL` and `NIGHTSCOUT_TOKEN` are set, the workout screen reads the
 GET {NIGHTSCOUT_URL}/api/v1/entries.json?token=...&count=1
 ```
 
-That request is a GET. Steady never writes to Nightscout or to Loop. If Nightscout is not configured or cannot be reached, the glucose card is hidden. The card is a reading and a trend only. Under about 120 mg/dL, and only while cardio is still ahead, it adds one line: have a low snack handy. It does not suggest insulin doses. Carbs for a meal are shown so they can be typed into Loop by hand.
+That request is a GET. Steady never writes to Nightscout or to Loop. If Nightscout is not configured or cannot be reached, the glucose card is hidden and Settings says why. A reading older than 15 minutes still shows, marked as older than 15 minutes. The card is a reading and a trend only. Under about 120 mg/dL, and only while cardio is still ahead, it adds one line: have a low snack handy. It does not suggest insulin doses. Carbs for a meal are shown so they can be typed into Loop by hand.
 
 ## Meal estimates
 
