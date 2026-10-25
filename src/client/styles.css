@@ -90,10 +90,13 @@ h2 { font-size: 15px; font-weight: 600; letter-spacing: -0.01em; line-height: 20
     calc(74px + env(safe-area-inset-bottom, 0px))
     max(16px, env(safe-area-inset-left, 0px));
 }
-.main > * + * { margin-top: 22px; }
-.main > h1 + *,
-.main > .title-row + *,
-.main > .top + * { margin-top: 28px; }
+main.main > * + * { margin-top: 22px; }
+main.main > h1 + *,
+main.main > .title-row + *,
+main.main > .top + * { margin-top: 28px; }
+main.main > .glucose-pin,
+main.main > .log-dock,
+main.main > .sheet-back { margin-top: 0; }
 body.logging .main { padding-bottom: calc(176px + env(safe-area-inset-bottom)); }
 
 .tabbar {
