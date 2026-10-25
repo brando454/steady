@@ -189,6 +189,37 @@ body.logging .main { padding-bottom: calc(402px + env(safe-area-inset-bottom)); 
   .primary.danger { color: #3b0907; }
 }
 .secondary { background: var(--accent-soft); color: var(--accent); width: 100%; }
+.secondary.pending {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+}
+.secondary.pending:disabled { opacity: 1; }
+.spinner {
+  width: 1.05rem;
+  height: 1.05rem;
+  border-radius: 50%;
+  border: 2px solid color-mix(in srgb, currentColor 35%, transparent);
+  border-top-color: currentColor;
+  animation: spin 700ms linear infinite;
+  flex: none;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+.locked { opacity: 0.55; }
+.locked :disabled { opacity: 1; }
+.inline-error {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 8px 0;
+  padding: 10px 12px;
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--danger) 14%, var(--card));
+}
+.inline-error p { margin: 0; }
+.inline-error .linkish { flex: none; }
 .ghost { background: transparent; color: var(--muted); width: 100%; }
 .stack { display: grid; gap: 8px; margin-top: 12px; }
 .split { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }

@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { api, compressImage, formatInt, formatQty, messageOf } from "../api";
+import { createFlightGuard } from "../../shared/flight";
 import { timeValue } from "../../shared/time";
 import type { FavoriteDTO, FoodDayDTO, MealDTO } from "../../shared/types";
 import { Banner, Confirm, useNav, useToast } from "../ui";
@@ -15,6 +16,9 @@ type FormState = {
 };
 
 const emptyForm: FormState = { name: "", calories: "", protein: "", carbs: "", fat: "", note: "", photo: null };
+const ESTIMATE_TIMEOUT_MS = 40_000;
+
+type MealEstimate = { name: string; calories: number; protein: number; carbs: number; fat: number };
 
 function num(value: string): number | null {
   if (value.trim() === "") return null;
@@ -33,10 +37,16 @@ export function FoodScreen({ search }: { search: URLSearchParams }) {
   const [aiImage, setAiImage] = useState<string | null>(null);
   const [editingFavs, setEditingFavs] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [estimateError, setEstimateError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [estimating, setEstimating] = useState(false);
   const [removeId, setRemoveId] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement | null>(null);
   const appliedEdit = useRef<string | null>(null);
+  const flight = useRef(createFlightGuard()).current;
+  const compressing = useRef<Promise<void> | null>(null);
+  const draft = useRef({ note: "", photo: null as string | null, ai: null as string | null });
+  draft.current = { note: form.note, photo: form.photo, ai: aiImage };
 
   useEffect(() => {
     let stop = false;
@@ -85,45 +95,63 @@ export function FoodScreen({ search }: { search: URLSearchParams }) {
   }
 
   async function onPhoto(file: File) {
-    setError(null);
-    try {
-      const big = await compressImage(file, 1024, 0.8);
-      let thumb = await compressImage(file, 480, 0.6);
-      if (thumb.length > 120_000) thumb = await compressImage(file, 360, 0.5);
-      setAiImage(big);
-      if (thumb.length > 120_000) {
-        patch({ photo: null });
-        setError("That photo is too big to keep. You can still estimate from it.");
-      } else {
-        patch({ photo: thumb });
+    const job = (async () => {
+      setError(null);
+      try {
+        const big = await compressImage(file, 1024, 0.8);
+        let thumb = await compressImage(file, 480, 0.6);
+        if (thumb.length > 120_000) thumb = await compressImage(file, 360, 0.5);
+        draft.current.ai = big;
+        setAiImage(big);
+        if (thumb.length > 120_000) {
+          draft.current.photo = null;
+          patch({ photo: null });
+          setError("That photo is too big to keep. You can still estimate from it.");
+        } else {
+          draft.current.photo = thumb;
+          patch({ photo: thumb });
+        }
+      } catch (err) {
+        setError(messageOf(err));
       }
-    } catch (err) {
-      setError(messageOf(err));
+    })();
+    compressing.current = job;
+    try {
+      await job;
+    } finally {
+      if (compressing.current === job) compressing.current = null;
     }
   }
 
   async function estimate() {
-    setBusy(true);
-    setError(null);
+    if (!flight.tryStart()) return;
+    setEstimating(true);
+    setEstimateError(null);
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => controller.abort(), ESTIMATE_TIMEOUT_MS);
     try {
-      const estimate = await api<{ name: string; calories: number; protein: number; carbs: number; fat: number }>(
-        "/api/meals/estimate",
-        {
-          method: "POST",
-          body: JSON.stringify({ note: form.note, imageDataUrl: aiImage ?? form.photo }),
-        },
-      );
+      if (compressing.current) await compressing.current;
+      if (controller.signal.aborted) throw new DOMException("The estimate took too long.", "AbortError");
+      const current = draft.current;
+      const result = await api<MealEstimate>("/api/meals/estimate", {
+        method: "POST",
+        body: JSON.stringify({ note: current.note, imageDataUrl: current.ai ?? current.photo }),
+        signal: controller.signal,
+      });
       patch({
-        name: estimate.name,
-        calories: String(estimate.calories),
-        protein: String(estimate.protein),
-        carbs: String(estimate.carbs),
-        fat: String(estimate.fat),
+        name: result.name,
+        calories: String(result.calories),
+        protein: String(result.protein),
+        carbs: String(result.carbs),
+        fat: String(result.fat),
       });
     } catch (err) {
-      setError(messageOf(err));
+      const aborted = err instanceof Error && (err.name === "AbortError" || err.name === "TimeoutError");
+      setEstimateError(aborted ? "That took too long." : messageOf(err));
     } finally {
-      setBusy(false);
+      window.clearTimeout(timer);
+      flight.finish();
+      setEstimating(false);
     }
   }
 
@@ -286,31 +314,58 @@ export function FoodScreen({ search }: { search: URLSearchParams }) {
 
       <section className="card">
         <p className="kicker">{editing ? "Edit meal" : "Log a meal"}</p>
-        <input ref={fileRef} hidden type="file" accept="image/*" onChange={(event) => {
-          const file = event.target.files?.[0];
-          event.target.value = "";
-          if (file) void onPhoto(file);
-        }} />
-        <button type="button" className="secondary" onClick={() => fileRef.current?.click()}>
-          {form.photo ? "Replace photo" : "Add a photo"}
-        </button>
-        {form.photo && <img className="preview" src={form.photo} alt="" />}
-        {form.photo && (
-          <button type="button" className="ghost" onClick={() => { patch({ photo: null }); setAiImage(null); }}>
-            Remove photo
+        <div className={estimating ? "locked" : undefined}>
+          <input ref={fileRef} hidden type="file" accept="image/*" disabled={estimating} onChange={(event) => {
+            const file = event.target.files?.[0];
+            event.target.value = "";
+            if (file) void onPhoto(file);
+          }} />
+          <button type="button" className="secondary" disabled={estimating} onClick={() => fileRef.current?.click()}>
+            {form.photo ? "Replace photo" : "Add a photo"}
           </button>
-        )}
-        <label className="field">
-          <span>Note</span>
-          <textarea
-            value={form.note}
-            placeholder="Portions, sauces, what was on the plate"
-            onChange={(event) => patch({ note: event.target.value })}
-          />
-        </label>
-        <button type="button" className="secondary" disabled={busy || !food?.aiConfigured} onClick={() => void estimate()}>
-          Estimate
+          {form.photo && <img className="preview" src={form.photo} alt="" />}
+          {form.photo && (
+            <button type="button" className="ghost" disabled={estimating} onClick={() => { draft.current.photo = null; draft.current.ai = null; patch({ photo: null }); setAiImage(null); }}>
+              Remove photo
+            </button>
+          )}
+          <label className="field">
+            <span>Note</span>
+            <textarea
+              value={form.note}
+              placeholder="Portions, sauces, what was on the plate"
+              disabled={estimating}
+              onChange={(event) => {
+                draft.current.note = event.target.value;
+                patch({ note: event.target.value });
+              }}
+            />
+          </label>
+        </div>
+        <button
+          type="button"
+          className={estimating ? "secondary pending" : "secondary"}
+          disabled={estimating || !food?.aiConfigured}
+          aria-busy={estimating}
+          onClick={() => void estimate()}
+        >
+          {estimating ? (
+            <>
+              <span className="spinner" aria-hidden="true" />
+              Estimating…
+            </>
+          ) : (
+            "Estimate"
+          )}
         </button>
+        {estimateError && (
+          <div className="inline-error" role="alert">
+            <p>{estimateError}</p>
+            <button type="button" className="linkish" onClick={() => void estimate()}>
+              Try again
+            </button>
+          </div>
+        )}
         {food && !food.aiConfigured && <p className="quiet">No AI key is set. Enter the meal yourself.</p>}
 
         <label className="field">
@@ -342,10 +397,10 @@ export function FoodScreen({ search }: { search: URLSearchParams }) {
           <p>You enter it in Loop</p>
         </aside>
         <div className="split">
-          <button type="button" className="secondary" disabled={busy} onClick={() => void saveFavorite()}>
+          <button type="button" className="secondary" disabled={busy || estimating} onClick={() => void saveFavorite()}>
             Save as usual
           </button>
-          <button type="button" className="primary" disabled={busy} onClick={() => void logMeal()}>
+          <button type="button" className="primary" disabled={busy || estimating} onClick={() => void logMeal()}>
             {editing ? "Save changes" : "Log meal"}
           </button>
         </div>
