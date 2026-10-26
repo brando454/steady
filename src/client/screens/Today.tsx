@@ -115,6 +115,9 @@ export function TodayScreen() {
   );
 }
 
+/** Sessions whose burst already started in this document, so a second effect pass cannot cancel it. */
+const dayDoneStarted = new Set<string>();
+
 function CompletedToday({
   suggestion,
   onView,
@@ -126,7 +129,8 @@ function CompletedToday({
   const [celebrate, setCelebrate] = useState(false);
 
   useEffect(() => {
-    if (!seenKey) return;
+    if (!seenKey || dayDoneStarted.has(seenKey)) return;
+    dayDoneStarted.add(seenKey);
     let seen = false;
     try {
       seen = localStorage.getItem(seenKey) === "1";
