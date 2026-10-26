@@ -399,6 +399,7 @@ body.logging .main {
   white-space: nowrap;
   min-height: 32px;
 }
+.chip.on { background: var(--accent-soft); color: var(--accent); }
 
 .when {
   display: grid;

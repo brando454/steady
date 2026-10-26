@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from "react";
 import { api, compressImage, formatInt, formatQty, messageOf } from "../api";
 import { createFlightGuard } from "../../shared/flight";
+import { usualActionLabel } from "../../shared/logic";
 import { timeValue } from "../../shared/time";
-import type { FavoriteDTO, FoodDayDTO, MealDTO } from "../../shared/types";
-import { reassertMainScroll } from "../scroll";
+import type { FavoriteDTO, FoodDayDTO } from "../../shared/types";
+import { alignToTopOfMain, reassertMainScroll } from "../scroll";
 import { Banner, Confirm, useNav, useToast } from "../ui";
 
 type FormState = {
@@ -27,6 +28,12 @@ function num(value: string): number | null {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
+function fieldNumber(value: number): string {
+  const rounded = Math.round(value * 10) / 10;
+  if (Number.isInteger(rounded)) return String(rounded);
+  return rounded.toFixed(1);
+}
+
 export function FoodScreen({ search }: { search: URLSearchParams }) {
   const { go } = useNav();
   const toast = useToast();
@@ -42,7 +49,10 @@ export function FoodScreen({ search }: { search: URLSearchParams }) {
   const [busy, setBusy] = useState(false);
   const [estimating, setEstimating] = useState(false);
   const [removeId, setRemoveId] = useState<string | null>(null);
+  const [loaded, setLoaded] = useState<FavoriteDTO | null>(null);
+  const [bringEstimate, setBringEstimate] = useState(0);
   const fileRef = useRef<HTMLInputElement | null>(null);
+  const estimateRef = useRef<HTMLElement | null>(null);
   const appliedEdit = useRef<string | null>(null);
   const flight = useRef(createFlightGuard()).current;
   const compressing = useRef<Promise<void> | null>(null);
@@ -84,6 +94,12 @@ export function FoodScreen({ search }: { search: URLSearchParams }) {
     setTime(timeValue(new Date(meal.loggedAt)));
     setAiImage(null);
   }, [food, editId]);
+
+  useEffect(() => {
+    if (!bringEstimate) return;
+    const node = estimateRef.current;
+    if (node) alignToTopOfMain(node, 12);
+  }, [bringEstimate]);
 
   function patch(partial: Partial<FormState>) {
     setForm((current) => ({ ...current, ...partial }));
@@ -181,7 +197,8 @@ export function FoodScreen({ search }: { search: URLSearchParams }) {
     setError(null);
     try {
       const body = payload();
-      await api("/api/favorites", { method: "POST", body: JSON.stringify(body) });
+      const saved = await api<FavoriteDTO>("/api/favorites", { method: "POST", body: JSON.stringify(body) });
+      setLoaded(saved);
       await reload();
       reassertMainScroll();
       toast({ text: "Saved as usual" });
@@ -206,6 +223,7 @@ export function FoodScreen({ search }: { search: URLSearchParams }) {
         await api("/api/meals", { method: "POST", body: JSON.stringify(body) });
         setForm(emptyForm);
         setAiImage(null);
+        setLoaded(null);
       }
       await reload();
       reassertMainScroll();
@@ -218,28 +236,28 @@ export function FoodScreen({ search }: { search: URLSearchParams }) {
     }
   }
 
-  async function logFavorite(favorite: FavoriteDTO) {
+  function fillFavorite(favorite: FavoriteDTO) {
+    if (editId) appliedEdit.current = editId;
+    const note = favorite.note ?? "";
+    draft.current = { note, photo: null, ai: null };
+    setAiImage(null);
+    setEstimateError(null);
     setError(null);
-    try {
-      const when = (time || food?.nowTime || "12:00").slice(0, 5);
-      const day = date || food?.today || "";
-      const meal = await api<MealDTO>(`/api/favorites/${favorite.id}/log`, {
-        method: "POST",
-        body: JSON.stringify({ date: day, time: when }),
-      });
-      await reload();
-      reassertMainScroll();
-      toast({
-        text: `Logged ${meal.name}`,
-        undo: () => {
-          api(`/api/meals/${meal.id}`, { method: "DELETE" })
-            .then(() => reload())
-            .catch((err) => setError(messageOf(err)));
-        },
-      });
-    } catch (err) {
-      setError(messageOf(err));
+    setLoaded(favorite);
+    setForm({
+      name: favorite.name,
+      calories: fieldNumber(favorite.calories),
+      protein: fieldNumber(favorite.protein),
+      carbs: fieldNumber(favorite.carbs),
+      fat: fieldNumber(favorite.fat),
+      note,
+      photo: null,
+    });
+    if (editId) {
+      const day = date || food?.date || "";
+      go(day ? `/food?date=${encodeURIComponent(day)}` : "/food", { replace: true, keepScroll: true });
     }
+    setBringEstimate((value) => value + 1);
   }
 
   async function deleteMeal() {
@@ -250,6 +268,7 @@ export function FoodScreen({ search }: { search: URLSearchParams }) {
       if (editId === removeId) {
         appliedEdit.current = null;
         setForm(emptyForm);
+        setLoaded(null);
         go(`/food?date=${date}`, { replace: true, keepScroll: true });
       }
       setRemoveId(null);
@@ -283,7 +302,7 @@ export function FoodScreen({ search }: { search: URLSearchParams }) {
 
       <div className="fav-head">
         <div className="fav-copy">
-          <p className="quiet">Your usuals, one tap</p>
+          <p className="quiet">Your usuals</p>
           {food && food.favorites.length > 0 && (
             <p className="quiet fav-more">{editingFavs ? "Tap one to remove it" : "Swipe for more"}</p>
           )}
@@ -300,7 +319,13 @@ export function FoodScreen({ search }: { search: URLSearchParams }) {
                 {favorite.name}
               </button>
             ) : (
-              <button key={favorite.id} type="button" className="chip" onClick={() => void logFavorite(favorite)}>
+              <button
+                key={favorite.id}
+                type="button"
+                className={loaded?.id === favorite.id ? "chip on" : "chip"}
+                aria-pressed={loaded?.id === favorite.id}
+                onClick={() => fillFavorite(favorite)}
+              >
                 {favorite.name}
               </button>
             ),
@@ -361,7 +386,7 @@ export function FoodScreen({ search }: { search: URLSearchParams }) {
       )}
       {food && !food.aiConfigured && <p className="quiet">No AI key is set. Enter the meal yourself.</p>}
 
-      <section className="card">
+      <section className="card" ref={estimateRef}>
         <div className="split-head">
           <h2>{form.name.trim() || "Meal"}</h2>
           <p className="quiet">Estimate, edit anything</p>
@@ -398,7 +423,14 @@ export function FoodScreen({ search }: { search: URLSearchParams }) {
       </section>
       <div className="split">
         <button type="button" className="secondary" disabled={busy || estimating} onClick={() => void saveFavorite()}>
-          Save as usual
+          {usualActionLabel(loaded, {
+            name: form.name,
+            calories: num(form.calories),
+            protein: num(form.protein),
+            carbs: num(form.carbs),
+            fat: num(form.fat),
+            note: form.note,
+          })}
         </button>
         <button type="button" className="primary" disabled={busy || estimating} onClick={() => void logMeal()}>
           {editing ? "Save changes" : "Log meal"}

@@ -220,6 +220,38 @@ export function shouldCelebrate(alreadySeen: boolean, reduceMotion: boolean): bo
   return !alreadySeen && !reduceMotion;
 }
 
+export type UsualSnapshot = {
+  name: string;
+  calories: number;
+  protein: number;
+  carbs: number;
+  fat: number;
+  note: string | null;
+};
+
+export type UsualForm = {
+  name: string;
+  calories: number | null;
+  protein: number | null;
+  carbs: number | null;
+  fat: number | null;
+  note: string;
+};
+
+/** Editing a filled usual stays local. The button offers an update only when that saved meal's name is still the one on the form and something changed. */
+export function usualActionLabel(loaded: UsualSnapshot | null, form: UsualForm): "Save as usual" | "Update usual" {
+  if (!loaded) return "Save as usual";
+  const sameName = form.name.trim().toLowerCase() === loaded.name.trim().toLowerCase();
+  if (!sameName) return "Save as usual";
+  const same =
+    form.calories === loaded.calories &&
+    form.protein === loaded.protein &&
+    form.carbs === loaded.carbs &&
+    form.fat === loaded.fat &&
+    form.note === (loaded.note ?? "");
+  return same ? "Save as usual" : "Update usual";
+}
+
 export type Ramp = {
   startDate: string;
   weeks: { offset: number; percent: number }[];

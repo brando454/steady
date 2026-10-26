@@ -13,6 +13,7 @@ import {
   dayDoneLine,
   shouldCelebrate,
   suggestedDayId,
+  usualActionLabel,
   todayFocus,
   weekDayStatuses,
   weightHint,
@@ -203,6 +204,17 @@ test("today keeps the workout finished on the Boise day, then moves on tomorrow"
   assert.equal(shouldCelebrate(false, false), true);
   assert.equal(shouldCelebrate(true, false), false);
   assert.equal(shouldCelebrate(false, true), false);
+});
+
+test("a filled usual updates the saved meal only as an explicit rename of the button", () => {
+  const loaded = { name: "Chicken rice bowl", calories: 740, protein: 58, carbs: 70, fat: 22, note: "About 200 g chicken" };
+  const same = { name: "Chicken rice bowl", calories: 740, protein: 58, carbs: 70, fat: 22, note: "About 200 g chicken" };
+  assert.equal(usualActionLabel(null, same), "Save as usual");
+  assert.equal(usualActionLabel(loaded, same), "Save as usual");
+  assert.equal(usualActionLabel(loaded, { ...same, calories: 700 }), "Update usual");
+  assert.equal(usualActionLabel(loaded, { ...same, note: "" }), "Update usual");
+  assert.equal(usualActionLabel({ ...loaded, note: null }, { ...same, note: "" }), "Save as usual");
+  assert.equal(usualActionLabel(loaded, { ...same, name: "Bigger bowl" }), "Save as usual");
 });
 
 test("Boise civil dates pick the Monday week across the UTC offset", () => {
