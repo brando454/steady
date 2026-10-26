@@ -41,7 +41,7 @@ export function SwapScreen({ sessionId, sxId }: { sessionId: string; sxId: strin
           scope: nextScope,
         }),
       });
-      go(`/workout/session/${sessionId}`, { replace: true });
+      go(`/workout/session/${sessionId}`, { replace: true, restoreScroll: true });
     } catch (err) {
       setError(messageOf(err));
       setBusy(false);

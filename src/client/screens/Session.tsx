@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type MutableRefObject } from "react";
 import { createPortal } from "react-dom";
 import { api, messageOf } from "../api";
 import type { GlucoseDTO, SessionDTO, SessionExerciseDTO, SetDTO } from "../../shared/types";
+import { rememberMainScroll, restoreArmed, useRestoreMainScroll } from "../scroll";
 import { Back, Banner, Confirm, TrendArrow, useNav, useNow } from "../ui";
 
 type Draft = { weight: string; reps: string; minutes: string; note: string };
@@ -120,6 +121,8 @@ export function SessionScreen({ sessionId }: { sessionId: string }) {
   const buzzed = useRef(false);
   const glucoseCard = useRef<HTMLElement | null>(null);
   const [glucosePinned, setGlucosePinned] = useState(false);
+  const [glucoseReady, setGlucoseReady] = useState(false);
+  const sessionKey = `/workout/session/${sessionId}`;
 
   useEffect(() => {
     let stop = false;
@@ -151,14 +154,17 @@ export function SessionScreen({ sessionId }: { sessionId: string }) {
 
   useEffect(() => {
     let stop = false;
-    const load = () => {
+    const load = (first = false) => {
       api<GlucoseDTO>("/api/glucose")
         .then((data) => {
           if (!stop) setGlucose(data);
         })
-        .catch(() => undefined);
+        .catch(() => undefined)
+        .finally(() => {
+          if (!stop && first) setGlucoseReady(true);
+        });
     };
-    load();
+    load(true);
     const id = window.setInterval(load, 60_000);
     const onVisible = () => {
       if (document.visibilityState === "visible") load();
@@ -172,9 +178,11 @@ export function SessionScreen({ sessionId }: { sessionId: string }) {
   }, []);
 
   useEffect(() => {
-    if (!currentId) return;
+    if (!currentId || restoreArmed(sessionKey)) return;
     document.querySelector(`[data-set="${currentId}"]`)?.scrollIntoView({ block: "nearest" });
-  }, [currentId]);
+  }, [currentId, sessionKey]);
+
+  useRestoreMainScroll(sessionKey, Boolean(session) && glucoseReady);
 
   useEffect(() => {
     return () => {
@@ -420,10 +428,17 @@ export function SessionScreen({ sessionId }: { sessionId: string }) {
       )}
 
       {session.exercises.map((exercise) => (
-        <section className="card" key={exercise.id}>
+        <section className="card" key={exercise.id} data-scroll-anchor={exercise.id}>
           <div className="ex-head">
             <div>
-              <button type="button" className="ex-name" onClick={() => go(`/exercise/${exercise.exerciseId}?from=${encodeURIComponent(`/workout/session/${session.id}`)}`)}>
+              <button
+                type="button"
+                className="ex-name"
+                onClick={() => {
+                  rememberMainScroll(sessionKey, exercise.id);
+                  go(`/exercise/${exercise.exerciseId}?from=${encodeURIComponent(`/workout/session/${session.id}`)}`);
+                }}
+              >
                 {exercise.name}
               </button>
               <p className="quiet">
@@ -433,7 +448,14 @@ export function SessionScreen({ sessionId }: { sessionId: string }) {
               </p>
             </div>
             {!finished && !exercise.isCardio && (
-              <button type="button" className="pill" onClick={() => go(`/workout/session/${session.id}/swap/${exercise.id}`)}>
+              <button
+                type="button"
+                className="pill"
+                onClick={() => {
+                  rememberMainScroll(sessionKey, exercise.id);
+                  go(`/workout/session/${session.id}/swap/${exercise.id}`);
+                }}
+              >
                 Swap
               </button>
             )}

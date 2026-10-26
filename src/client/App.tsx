@@ -9,6 +9,7 @@ import { SwapScreen } from "./screens/Swap";
 import { TodayScreen } from "./screens/Today";
 import { WeekScreen } from "./screens/Week";
 import { WeightScreen } from "./screens/Weight";
+import { armRestore, dropScroll } from "./scroll";
 import { Providers } from "./ui";
 
 type Tab = "today" | "workout" | "food" | "weight";
@@ -59,20 +60,25 @@ export function App() {
 
   useEffect(() => {
     const sync = () => {
-      setLoc(window.location.pathname + window.location.search);
+      const next = window.location.pathname + window.location.search;
+      setLoc(next);
+      if (armRestore(next)) return;
+      dropScroll(next);
       document.querySelector(".main")?.scrollTo(0, 0);
     };
     window.addEventListener("popstate", sync);
     return () => window.removeEventListener("popstate", sync);
   }, []);
 
-  const go = useCallback((to: string, opts?: { replace?: boolean }) => {
+  const go = useCallback((to: string, opts?: { replace?: boolean; restoreScroll?: boolean }) => {
     const current = window.location.pathname + window.location.search;
     if (current !== to) {
       if (opts?.replace) window.history.replaceState({}, "", to);
       else window.history.pushState({}, "", to);
     }
     setLoc(window.location.pathname + window.location.search);
+    if (opts?.restoreScroll && armRestore(to)) return;
+    dropScroll(to);
     document.querySelector(".main")?.scrollTo(0, 0);
   }, []);
 
