@@ -1,10 +1,14 @@
+import PhotosUI
 import SwiftUI
+import UIKit
 
 /// Tapping a saved meal fills the estimate. It does not log, and it does not change the saved meal.
 struct FoodView: View {
   @EnvironmentObject private var model: AppModel
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
   @State private var draft = MealDraft.empty
+  @State private var estimateImage: String?
+  @State private var photoNote: String?
   @State private var loaded: Favorite?
   @State private var editingId: String?
   @State private var editingFavs = false
@@ -13,6 +17,10 @@ struct FoodView: View {
   @State private var seeded = false
   @State private var scrollToken = 0
   @State private var removeId: String?
+  @State private var showCamera = false
+  @State private var showLibrary = false
+  @State private var libraryItem: PhotosPickerItem?
+  @State private var estimating = false
 
   var body: some View {
     ScrollViewReader { proxy in
@@ -23,7 +31,8 @@ struct FoodView: View {
         BannerText(text: model.banner)
         if let food = model.food {
           usuals(food)
-          noteField
+          photoNoteRow
+          estimateButton
           estimateCard.id("estimate")
           loopCard
           actions
@@ -55,6 +64,30 @@ struct FoodView: View {
     .onChange(of: date) { _, value in
       guard seeded, value.range(of: #"^\d{4}-\d{2}-\d{2}$"#, options: .regularExpression) != nil else { return }
       Task { await model.loadFood(date: value) }
+    }
+    .fullScreenCover(isPresented: $showCamera) {
+      CameraPicker(
+        onImage: { image in
+          showCamera = false
+          applyPhoto(image)
+        },
+        onCancel: { showCamera = false }
+      )
+      .ignoresSafeArea()
+    }
+    .photosPicker(isPresented: $showLibrary, selection: $libraryItem, matching: .images)
+    .onChange(of: libraryItem) { _, item in
+      guard let item else { return }
+      Task { @MainActor in
+        let loaded = try? await item.loadTransferable(type: MealLibraryPhoto.self)
+        let image = loaded?.image
+        if let image {
+          applyPhoto(image)
+        } else {
+          model.banner = "Could not read that photo"
+        }
+        libraryItem = nil
+      }
     }
     .confirmationDialog("Delete this meal?", isPresented: Binding(
       get: { removeId != nil },
@@ -122,14 +155,97 @@ struct FoodView: View {
     }
   }
 
-  private var noteField: some View {
-    TextField("About 1.5 cups jasmine rice, 6 oz beef, light teriyaki", text: $draft.note, axis: .vertical)
-      .lineLimit(3...6)
-      .font(.system(size: 13))
-      .padding(10)
-      .background(Theme.card)
-      .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-      .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).stroke(Theme.line, lineWidth: 1))
+  private var shownPhoto: String? { draft.photo ?? estimateImage }
+
+  private var photoNoteRow: some View {
+    VStack(alignment: .leading, spacing: 8) {
+      HStack(alignment: .top, spacing: 14) {
+        Menu {
+          if UIImagePickerController.isSourceTypeAvailable(.camera) {
+            Button("Take photo") { showCamera = true }
+          }
+          Button("Choose photo") { showLibrary = true }
+        } label: {
+          ZStack {
+            Theme.fill
+            if let shownPhoto, let image = MealPhoto.image(from: shownPhoto) {
+              Image(uiImage: image)
+                .resizable()
+                .scaledToFill()
+            } else {
+              Text("Photo")
+                .font(.system(size: 12))
+                .foregroundStyle(Theme.muted)
+            }
+          }
+          .frame(width: 92, height: 92)
+          .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        }
+        .menuStyle(.borderlessButton)
+        .buttonStyle(.plain)
+        .disabled(estimating)
+        .accessibilityLabel(shownPhoto == nil ? "Add a photo" : "Change photo")
+
+        TextField("About 1.5 cups jasmine rice, 6 oz beef, light teriyaki", text: $draft.note, axis: .vertical)
+          .lineLimit(3...6)
+          .font(.system(size: 13))
+          .padding(10)
+          .frame(maxWidth: .infinity, minHeight: 92, alignment: .topLeading)
+          .background(Theme.card)
+          .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+          .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).stroke(Theme.line, lineWidth: 1))
+          .disabled(estimating)
+      }
+      if shownPhoto != nil {
+        QuietButton(title: "Remove photo") { removePhoto() }
+          .disabled(estimating)
+      }
+      Text("Add a photo, a note, or both. The note fills in what the camera can't see, like portions or sauce.")
+        .font(.system(size: 13))
+        .foregroundStyle(Theme.muted)
+        .fixedSize(horizontal: false, vertical: true)
+      if let photoNote {
+        Text(photoNote)
+          .font(.system(size: 13))
+          .foregroundStyle(Theme.muted)
+          .fixedSize(horizontal: false, vertical: true)
+      }
+    }
+  }
+
+  private var estimateEnabled: Bool {
+    !estimating && !model.busy && model.food?.aiConfigured == true
+  }
+
+  private var estimateButton: some View {
+    VStack(alignment: .leading, spacing: 8) {
+      Button {
+        Task { await estimateMeal() }
+      } label: {
+        HStack(spacing: 8) {
+          if estimating {
+            ProgressView()
+              .controlSize(.small)
+              .tint(Theme.text)
+          }
+          Text(estimating ? "Estimating…" : "Estimate")
+            .font(.system(size: 14, weight: .semibold))
+        }
+        .foregroundStyle(Theme.text)
+        .frame(maxWidth: .infinity)
+        .frame(minHeight: 44)
+        .background(Theme.fill)
+        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .opacity(estimateEnabled ? 1 : 0.45)
+      }
+      .buttonStyle(.plain)
+      .disabled(!estimateEnabled)
+      if model.food?.aiConfigured == false {
+        Text("No AI key is set. Enter the meal yourself.")
+          .font(.system(size: 13))
+          .foregroundStyle(Theme.muted)
+      }
+    }
   }
 
   private var estimateCard: some View {
@@ -210,6 +326,13 @@ struct FoodView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
           }
           .buttonStyle(.plain)
+          if let photo = meal.photo, let image = MealPhoto.image(from: photo) {
+            Image(uiImage: image)
+              .resizable()
+              .scaledToFill()
+              .frame(width: 36, height: 36)
+              .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+          }
           QuietButton(title: "Delete") { removeId = meal.id }
         }
       }
@@ -261,6 +384,8 @@ struct FoodView: View {
     draft.fat = Format.qty(favorite.fat)
     draft.note = favorite.note ?? ""
     draft.photo = nil
+    estimateImage = nil
+    photoNote = nil
     model.banner = nil
     scrollToken += 1
   }
@@ -275,6 +400,8 @@ struct FoodView: View {
     draft.fat = Format.qty(meal.fat)
     draft.note = meal.note ?? ""
     draft.photo = meal.photo
+    estimateImage = nil
+    photoNote = nil
     if !meal.date.isEmpty { date = meal.date }
     if let clock = boiseClock(meal.loggedAt) { time = clock }
     model.banner = nil
@@ -329,6 +456,48 @@ struct FoodView: View {
     draft = .empty
     draft.date = keptDate
     draft.time = keptTime
+    estimateImage = nil
+    photoNote = nil
+  }
+
+  private func removePhoto() {
+    draft.photo = nil
+    estimateImage = nil
+    photoNote = nil
+  }
+
+  private func applyPhoto(_ image: UIImage) {
+    guard let prepared = MealPhoto.prepare(image) else {
+      model.banner = "Could not read that photo"
+      return
+    }
+    estimateImage = prepared.estimate
+    draft.photo = prepared.preview
+    photoNote = prepared.droppedPreview ? "That photo is too big to keep. You can still estimate from it." : nil
+    model.banner = nil
+  }
+
+  private func estimateMeal() async {
+    guard !estimating else { return }
+    let note = draft.note.trimmingCharacters(in: .whitespacesAndNewlines)
+    let image = estimateImage ?? draft.photo
+    if note.isEmpty && (image == nil || image?.isEmpty == true) {
+      model.banner = "Add a photo, a note, or both."
+      return
+    }
+    if !model.online {
+      model.banner = AppModel.offlineEstimate
+      return
+    }
+    estimating = true
+    defer { estimating = false }
+    guard let result = await model.estimate(note: draft.note, imageDataUrl: image) else { return }
+    draft.name = result.name
+    draft.calories = Format.qty(result.calories)
+    draft.protein = Format.qty(result.protein)
+    draft.carbs = Format.qty(result.carbs)
+    draft.fat = Format.qty(result.fat)
+    scrollToken += 1
   }
 
   private func validated() -> (name: String, calories: Double, protein: Double, carbs: Double, fat: Double)? {

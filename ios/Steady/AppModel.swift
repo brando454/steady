@@ -315,12 +315,23 @@ final class AppModel: ObservableObject {
   }
   func deleteFavorite(_ id: String) { enqueue { await self.deleteFavoriteNow(id) } }
 
+  static let offlineEstimate = "You're offline, so this can't be estimated yet. Enter the meal yourself. Log meal saves it on this phone until you're back."
+
   func estimate(note: String, imageDataUrl: String?) async -> MealEstimate? {
+    if !online {
+      banner = Self.offlineEstimate
+      return nil
+    }
     do {
       banner = nil
       return try await api.estimate(note: note, imageDataUrl: imageDataUrl)
     } catch {
-      banner = error.localizedDescription
+      if APIError.isOffline(error) {
+        online = false
+        banner = Self.offlineEstimate
+      } else {
+        banner = error.localizedDescription
+      }
       return nil
     }
   }
