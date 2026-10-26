@@ -3,6 +3,7 @@ import { createPortal } from "react-dom";
 import { api, messageOf } from "../api";
 import type { GlucoseDTO, SessionDTO, SessionExerciseDTO, SetDTO } from "../../shared/types";
 import { alignToTopOfMain, reassertMainScroll, rememberMainScroll, restoreArmed, revealCurrentSet, shouldRevealCurrentSet, useRestoreMainScroll } from "../scroll";
+import { WorkoutGlucoseView } from "../WorkoutGlucose";
 import { Back, Banner, Confirm, TrendArrow, useNav, useNow } from "../ui";
 
 type Draft = { weight: string; reps: string; minutes: string; note: string };
@@ -154,6 +155,11 @@ export function SessionScreen({ sessionId }: { sessionId: string }) {
   }, [session]);
 
   useEffect(() => {
+    if (!session) return;
+    if (session.completedAt) {
+      setGlucoseReady(true);
+      return;
+    }
     let stop = false;
     const load = (first = false) => {
       api<GlucoseDTO>("/api/glucose")
@@ -176,7 +182,29 @@ export function SessionScreen({ sessionId }: { sessionId: string }) {
       window.clearInterval(id);
       document.removeEventListener("visibilitychange", onVisible);
     };
-  }, []);
+  }, [session?.id, session?.completedAt]);
+
+  useEffect(() => {
+    if (!session?.completedAt || !session.glucose?.inProgress) return;
+    let stop = false;
+    const load = () => {
+      api<SessionDTO>(`/api/sessions/${session.id}`)
+        .then((data) => {
+          if (!stop) setSession(data);
+        })
+        .catch(() => undefined);
+    };
+    const id = window.setInterval(load, 60_000);
+    const onVisible = () => {
+      if (document.visibilityState === "visible") load();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      stop = true;
+      window.clearInterval(id);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
+  }, [session?.id, session?.completedAt, session?.glucose?.inProgress]);
 
   useEffect(() => {
     if (!currentId) return;
@@ -395,7 +423,13 @@ export function SessionScreen({ sessionId }: { sessionId: string }) {
       {session.rampNote && <p className="ramp">{session.rampNote}</p>}
       <Banner text={error} />
 
-      {reading && (
+      {finished && session.glucose && (
+        <section className="card">
+          <WorkoutGlucoseView summary={session.glucose} />
+        </section>
+      )}
+
+      {reading && !finished && (
         <section className={`card glucose-card${glucoseTone}`} id="glucose" ref={glucoseCard}>
           <div className="split-head">
             <p className="quiet">Glucose from Nightscout</p>
@@ -411,7 +445,7 @@ export function SessionScreen({ sessionId }: { sessionId: string }) {
           {low && <p className="snack">{snack}</p>}
         </section>
       )}
-      {reading && createPortal(
+      {reading && !finished && createPortal(
         <div className={`glucose-pin${glucosePinned ? " on" : ""}`} aria-hidden={glucosePinned ? undefined : true}>
           <div className="glucose-pin-row">
             <button

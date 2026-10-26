@@ -1,5 +1,6 @@
 import { glucoseStatusText } from "../shared/glucose";
 import type { GlucoseDTO } from "../shared/types";
+import type { CgmReading } from "../shared/workoutGlucose";
 
 export { glucoseStatusText };
 
@@ -53,6 +54,70 @@ export function nightscoutEntriesUrl(base: string, token: string): URL {
   url.searchParams.set("token", normalizeNightscoutToken(token));
   url.searchParams.set("count", "1");
   return url;
+}
+
+/** Historical SGV query. GET only; Steady never writes these entries back. */
+export function nightscoutRangeUrl(base: string, token: string, fromMs: number, toMs: number): URL {
+  const root = normalizeNightscoutBase(base);
+  const url = new URL(`${root}/api/v1/entries.json`);
+  url.searchParams.set("token", normalizeNightscoutToken(token));
+  url.searchParams.set("find[date][$gte]", String(Math.floor(fromMs)));
+  url.searchParams.set("find[date][$lte]", String(Math.ceil(toMs)));
+  url.searchParams.set("count", "1000");
+  return url;
+}
+
+/** Valid SGV rows from a Nightscout entries array. A non-array payload is null. */
+export function parseNightscoutEntries(data: unknown): CgmReading[] | null {
+  if (!Array.isArray(data)) return null;
+  const byAt = new Map<number, number>();
+  for (const item of data) {
+    if (!item || typeof item !== "object") continue;
+    const row = item as Record<string, unknown>;
+    if (typeof row.type === "string" && row.type !== "sgv") continue;
+    if (typeof row.sgv !== "number" || row.sgv < 20 || row.sgv > 500) continue;
+    const atMs = typeof row.date === "number" ? row.date : Number.NaN;
+    if (!Number.isFinite(atMs)) continue;
+    byAt.set(atMs, Math.round(row.sgv));
+  }
+  return [...byAt.entries()].sort((a, b) => a[0] - b[0]).map(([at, mgdl]) => ({ at, mgdl }));
+}
+
+export type GlucoseRangeResult =
+  | { ok: true; entries: CgmReading[] }
+  | { ok: false; reason: string; detail?: string };
+
+/**
+ * Read Nightscout entries in a time range. This function only sends GET.
+ * A failed read is not cached, so a later view can try again.
+ */
+export async function readGlucoseRange(
+  fromMs: number,
+  toMs: number,
+  fetchImpl: typeof fetch = fetch,
+): Promise<GlucoseRangeResult> {
+  const base = process.env.NIGHTSCOUT_URL ?? "";
+  const token = process.env.NIGHTSCOUT_TOKEN ?? "";
+  const missing = [base.trim() ? "" : "NIGHTSCOUT_URL", normalizeNightscoutToken(token) ? "" : "NIGHTSCOUT_TOKEN"].filter(Boolean);
+  if (missing.length > 0) return { ok: false, reason: "not_configured", detail: missing.join(" and ") };
+  const url = nightscoutRangeUrl(base, token, fromMs, toMs);
+  try {
+    const response = await fetchImpl(url, { method: "GET", signal: AbortSignal.timeout(8000) });
+    if (!response.ok) return { ok: false, reason: `http_${response.status}` };
+    let body: unknown;
+    try {
+      body = await response.json();
+    } catch {
+      return { ok: false, reason: "bad_payload" };
+    }
+    const entries = parseNightscoutEntries(body);
+    if (!entries) return { ok: false, reason: "bad_payload" };
+    return { ok: true, entries };
+  } catch (error) {
+    const name = error instanceof Error ? error.name : "";
+    if (name === "TimeoutError" || name === "AbortError") return { ok: false, reason: "timeout" };
+    return { ok: false, reason: "network", detail: failureDetail(error, token) };
+  }
 }
 
 export function scrubSecret(text: string, token: string): string {

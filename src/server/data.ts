@@ -1,6 +1,7 @@
 import { randomUUID } from "crypto";
 import { aiConfigured } from "./ai";
 import { pool, rows, tx, type Queryable } from "./db";
+import { glucoseForSession, glucoseForSessions } from "./workoutGlucose";
 import { formatPerformance, prescriptionLine } from "../shared/format";
 import {
   annotatePrs,
@@ -51,6 +52,7 @@ import type {
   WeekDTO,
   WeightDTO,
 } from "../shared/types";
+import type { WorkoutGlucose } from "../shared/workoutGlucose";
 import {
   cleanText,
   cleanThumb,
@@ -345,6 +347,7 @@ export async function getToday(): Promise<TodayDTO> {
       : [];
   let prCount = 0;
   let setCount = 0;
+  let glucose: WorkoutGlucose | null = null;
   if (focus?.completedToday && focus.sessionId) {
     const tally = await rows<{ sets: number; prs: number }>(
       pool,
@@ -357,6 +360,19 @@ export async function getToday(): Promise<TodayDTO> {
     );
     setCount = Number(tally[0]?.sets ?? 0);
     prCount = Number(tally[0]?.prs ?? 0);
+    const clocks = await rows<{ id: string; started_at: Date; completed_at: Date | null; glucose_summary: unknown }>(
+      pool,
+      "SELECT id, started_at, completed_at, glucose_summary FROM sessions WHERE id = $1",
+      [focus.sessionId],
+    );
+    if (clocks[0]) {
+      glucose = await glucoseForSession({
+        id: clocks[0].id,
+        startedAt: clocks[0].started_at,
+        completedAt: clocks[0].completed_at,
+        stored: clocks[0].glucose_summary,
+      });
+    }
   }
   return {
     date: today,
@@ -379,6 +395,7 @@ export async function getToday(): Promise<TodayDTO> {
           prCount,
           setCount,
           resultLine: focus.completedToday ? dayDoneLine(setCount, prCount) : "",
+          glucose: focus.completedToday ? glucose : null,
         }
       : null,
     weekDone: week.doneCount,
@@ -476,7 +493,8 @@ export async function getSession(id: string): Promise<SessionDTO | null> {
     started_at: Date;
     completed_at: Date | null;
     week_start: string;
-  }>(pool, "SELECT id, day_id, name, started_at, completed_at, week_start FROM sessions WHERE id = $1", [id]);
+    glucose_summary: unknown;
+  }>(pool, "SELECT id, day_id, name, started_at, completed_at, week_start, glucose_summary FROM sessions WHERE id = $1", [id]);
   const session = sessions[0];
   if (!session) return null;
   const exercises = await rows<SxRow>(
@@ -575,6 +593,12 @@ export async function getSession(id: string): Promise<SessionDTO | null> {
     weekStart: dateOnly(session.week_start),
     rampNote: rampForDate(settings.ramp, civilDate(session.started_at))?.note ?? null,
     exercises: dtoExercises,
+    glucose: await glucoseForSession({
+      id: session.id,
+      startedAt: session.started_at,
+      completedAt: session.completed_at,
+      stored: session.glucose_summary,
+    }),
   };
 }
 
@@ -1273,12 +1297,26 @@ export async function coachReview(from: string, to: string) {
     "SELECT weighed_on, weight_lb FROM weights WHERE weighed_on BETWEEN $1::date AND $2::date ORDER BY weighed_on",
     [from, to],
   );
-  const sessions = await rows<{ id: string; name: string; started_at: Date; completed_at: Date | null }>(
+  const sessions = await rows<{
+    id: string;
+    name: string;
+    started_at: Date;
+    completed_at: Date | null;
+    glucose_summary: unknown;
+  }>(
     pool,
-    `SELECT id, name, started_at, completed_at FROM sessions
+    `SELECT id, name, started_at, completed_at, glucose_summary FROM sessions
      WHERE (started_at AT TIME ZONE 'America/Boise')::date BETWEEN $1::date AND $2::date
      ORDER BY started_at`,
     [from, to],
+  );
+  const glucoseBySession = await glucoseForSessions(
+    sessions.map((session) => ({
+      id: session.id,
+      startedAt: session.started_at,
+      completedAt: session.completed_at,
+      stored: session.glucose_summary,
+    })),
   );
   const sessionIds = sessions.map((session) => session.id);
   const exercises = sessionIds.length
@@ -1344,6 +1382,7 @@ export async function coachReview(from: string, to: string) {
           name: session.name,
           startedAt: session.started_at.toISOString(),
           completedAt: stamp(session.completed_at),
+          glucose: glucoseBySession.get(session.id) ?? null,
           exercises: exercises
             .filter((exercise) => exercise.session_id === session.id)
             .map((exercise) => ({

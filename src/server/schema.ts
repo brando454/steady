@@ -58,7 +58,8 @@ CREATE TABLE IF NOT EXISTS sessions (
   started_at timestamptz NOT NULL,
   completed_at timestamptz,
   week_start date NOT NULL,
-  sample boolean NOT NULL DEFAULT false
+  sample boolean NOT NULL DEFAULT false,
+  glucose_summary jsonb
 );
 
 CREATE TABLE IF NOT EXISTS session_exercises (
@@ -128,6 +129,8 @@ CREATE INDEX IF NOT EXISTS meals_logged_idx ON meals (logged_at);
 CREATE INDEX IF NOT EXISTS sets_exercise_idx ON sets (exercise_id, logged_at);
 CREATE INDEX IF NOT EXISTS sessions_week_idx ON sessions (week_start);
 CREATE INDEX IF NOT EXISTS session_exercises_session_idx ON session_exercises (session_id);
+
+ALTER TABLE sessions ADD COLUMN IF NOT EXISTS glucose_summary jsonb;
 `;
 
 export async function migrate(): Promise<void> {
