@@ -2,6 +2,17 @@ import PhotosUI
 import SwiftUI
 import UIKit
 
+private struct EntrySnapshot {
+  var draft: MealDraft
+  var estimateImage: String?
+  var photoNote: String?
+  var loaded: Favorite?
+  var editingId: String?
+  var date: String
+  var time: String
+  var banner: String?
+}
+
 /// Tapping a saved meal fills the estimate. It does not log, and it does not change the saved meal.
 struct FoodView: View {
   @EnvironmentObject private var model: AppModel
@@ -21,6 +32,9 @@ struct FoodView: View {
   @State private var showLibrary = false
   @State private var libraryItem: PhotosPickerItem?
   @State private var estimating = false
+  @State private var estimateGeneration = 0
+  @State private var undoEntry: EntrySnapshot?
+  @State private var undoTask: Task<Void, Never>?
 
   var body: some View {
     ScrollViewReader { proxy in
@@ -105,6 +119,40 @@ struct FoodView: View {
     } message: {
       Text("It comes off the day's totals.")
     }
+    .overlay(alignment: .bottom) {
+      if undoEntry != nil {
+        undoToast
+          .padding(.horizontal, 12)
+          .padding(.bottom, 8)
+      }
+    }
+  }
+
+  private var entryIsBlank: Bool {
+    func blank(_ value: String) -> Bool {
+      value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+    let photo = draft.photo?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    let estimate = estimateImage?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    return photo.isEmpty && estimate.isEmpty && blank(draft.note) && blank(draft.name)
+      && blank(draft.calories) && blank(draft.protein) && blank(draft.carbs) && blank(draft.fat)
+  }
+
+  private var undoToast: some View {
+    HStack(spacing: 12) {
+      Text("Cleared")
+        .font(.system(size: 15, weight: .regular))
+      Spacer(minLength: 8)
+      Button("Undo") { undoClear() }
+        .font(.system(size: 15, weight: .semibold))
+        .buttonStyle(.plain)
+    }
+    .foregroundStyle(Theme.bg)
+    .padding(.leading, 16)
+    .padding(.trailing, 10)
+    .frame(minHeight: 44)
+    .background(Theme.text, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+    .accessibilityElement(children: .contain)
   }
 
   private func usuals(_ food: FoodDay) -> some View {
@@ -254,8 +302,19 @@ struct FoodView: View {
         Text(draft.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "Meal" : draft.name)
           .font(.system(size: 15, weight: .semibold))
           .foregroundStyle(Theme.text)
-        Spacer()
-        Text("Estimate, edit anything").font(.system(size: 13)).foregroundStyle(Theme.muted)
+        Spacer(minLength: 8)
+        if entryIsBlank {
+          Text("Estimate, edit anything")
+            .font(.system(size: 13))
+            .foregroundStyle(Theme.muted)
+        } else {
+          Button(action: clearEntry) {
+            Text("Clear")
+              .font(.system(size: 13, weight: .regular))
+              .foregroundStyle(Theme.accent)
+          }
+          .buttonStyle(.plain)
+        }
       }
       field("Name", text: $draft.name)
       LazyVGrid(columns: [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)], spacing: 12) {
@@ -489,15 +548,70 @@ struct FoodView: View {
       model.banner = AppModel.offlineEstimate
       return
     }
+    let generation = estimateGeneration
     estimating = true
-    defer { estimating = false }
-    guard let result = await model.estimate(note: draft.note, imageDataUrl: image) else { return }
+    let result = await model.estimate(note: draft.note, imageDataUrl: image)
+    guard generation == estimateGeneration else { return }
+    estimating = false
+    guard let result else { return }
     draft.name = result.name
     draft.calories = Format.qty(result.calories)
     draft.protein = Format.qty(result.protein)
     draft.carbs = Format.qty(result.carbs)
     draft.fat = Format.qty(result.fat)
     scrollToken += 1
+  }
+
+  private func clearEntry() {
+    let snapshot = EntrySnapshot(
+      draft: draft,
+      estimateImage: estimateImage,
+      photoNote: photoNote,
+      loaded: loaded,
+      editingId: editingId,
+      date: date,
+      time: time,
+      banner: model.banner
+    )
+    estimateGeneration += 1
+    estimating = false
+    UIImpactFeedbackGenerator(style: .light).impactOccurred()
+    UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+    draft = .empty
+    estimateImage = nil
+    photoNote = nil
+    loaded = nil
+    editingId = nil
+    model.banner = nil
+    date = Boise.civil()
+    time = Boise.timeValue()
+    showUndo(snapshot)
+  }
+
+  private func undoClear() {
+    guard let snapshot = undoEntry else { return }
+    undoTask?.cancel()
+    undoTask = nil
+    estimateGeneration += 1
+    draft = snapshot.draft
+    estimateImage = snapshot.estimateImage
+    photoNote = snapshot.photoNote
+    loaded = snapshot.loaded
+    editingId = snapshot.editingId
+    date = snapshot.date
+    time = snapshot.time
+    model.banner = snapshot.banner
+    undoEntry = nil
+  }
+
+  private func showUndo(_ snapshot: EntrySnapshot) {
+    undoEntry = snapshot
+    undoTask?.cancel()
+    undoTask = Task { @MainActor in
+      try? await Task.sleep(nanoseconds: 5_000_000_000)
+      guard !Task.isCancelled else { return }
+      undoEntry = nil
+    }
   }
 
   private func validated() -> (name: String, calories: Double, protein: Double, carbs: Double, fat: Double)? {

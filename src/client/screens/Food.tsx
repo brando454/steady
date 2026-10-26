@@ -1,10 +1,10 @@
 import { useEffect, useRef, useState } from "react";
 import { api, compressImage, formatInt, formatQty, messageOf } from "../api";
 import { createFlightGuard } from "../../shared/flight";
-import { usualActionLabel } from "../../shared/logic";
-import { timeValue } from "../../shared/time";
+import { mealEntryIsBlank, usualActionLabel } from "../../shared/logic";
+import { civilDate, timeValue } from "../../shared/time";
 import type { FavoriteDTO, FoodDayDTO } from "../../shared/types";
-import { alignToTopOfMain, reassertMainScroll } from "../scroll";
+import { alignToTopOfMain, beginMainScrollHold, reassertMainScroll } from "../scroll";
 import { Banner, Confirm, useNav, useToast } from "../ui";
 
 type FormState = {
@@ -56,6 +56,9 @@ export function FoodScreen({ search }: { search: URLSearchParams }) {
   const appliedEdit = useRef<string | null>(null);
   const flight = useRef(createFlightGuard()).current;
   const compressing = useRef<Promise<void> | null>(null);
+  const estimateAbort = useRef<AbortController | null>(null);
+  const entryGen = useRef(0);
+  const suppressEdit = useRef(false);
   const draft = useRef({ note: "", photo: null as string | null, ai: null as string | null });
   draft.current = { note: form.note, photo: form.photo, ai: aiImage };
 
@@ -78,6 +81,10 @@ export function FoodScreen({ search }: { search: URLSearchParams }) {
   }, [date]);
 
   useEffect(() => {
+    if (suppressEdit.current) {
+      if (!editId || appliedEdit.current === editId) suppressEdit.current = false;
+      return;
+    }
     if (!food || !editId || appliedEdit.current === editId) return;
     const meal = food.meals.find((item) => item.id === editId);
     if (!meal) return;
@@ -112,14 +119,17 @@ export function FoodScreen({ search }: { search: URLSearchParams }) {
   }
 
   async function onPhoto(file: File) {
+    const gen = entryGen.current;
     const job = (async () => {
       setError(null);
       try {
         const big = await compressImage(file, 1024, 0.8);
         let thumb = await compressImage(file, 480, 0.6);
         if (thumb.length > 120_000) thumb = await compressImage(file, 360, 0.5);
+        if (gen !== entryGen.current) return;
         draft.current.ai = big;
         setAiImage(big);
+        if (gen !== entryGen.current) return;
         if (thumb.length > 120_000) {
           draft.current.photo = null;
           patch({ photo: null });
@@ -129,6 +139,7 @@ export function FoodScreen({ search }: { search: URLSearchParams }) {
           patch({ photo: thumb });
         }
       } catch (err) {
+        if (gen !== entryGen.current) return;
         setError(messageOf(err));
       }
     })();
@@ -142,12 +153,15 @@ export function FoodScreen({ search }: { search: URLSearchParams }) {
 
   async function estimate() {
     if (!flight.tryStart()) return;
+    const gen = entryGen.current;
     setEstimating(true);
     setEstimateError(null);
     const controller = new AbortController();
+    estimateAbort.current = controller;
     const timer = window.setTimeout(() => controller.abort(), ESTIMATE_TIMEOUT_MS);
     try {
       if (compressing.current) await compressing.current;
+      if (gen !== entryGen.current) return;
       if (controller.signal.aborted) throw new DOMException("The estimate took too long.", "AbortError");
       const current = draft.current;
       const result = await api<MealEstimate>("/api/meals/estimate", {
@@ -155,6 +169,7 @@ export function FoodScreen({ search }: { search: URLSearchParams }) {
         body: JSON.stringify({ note: current.note, imageDataUrl: current.ai ?? current.photo }),
         signal: controller.signal,
       });
+      if (gen !== entryGen.current) return;
       patch({
         name: result.name,
         calories: String(result.calories),
@@ -163,12 +178,16 @@ export function FoodScreen({ search }: { search: URLSearchParams }) {
         fat: String(result.fat),
       });
     } catch (err) {
+      if (gen !== entryGen.current) return;
       const aborted = err instanceof Error && (err.name === "AbortError" || err.name === "TimeoutError");
       setEstimateError(aborted ? "That took too long." : messageOf(err));
     } finally {
       window.clearTimeout(timer);
-      flight.finish();
-      setEstimating(false);
+      if (estimateAbort.current === controller) estimateAbort.current = null;
+      if (gen === entryGen.current) {
+        flight.finish();
+        setEstimating(false);
+      }
     }
   }
 
@@ -282,6 +301,62 @@ export function FoodScreen({ search }: { search: URLSearchParams }) {
     }
   }
 
+  function clearEntry() {
+    beginMainScrollHold();
+    const snapshot = {
+      form,
+      aiImage,
+      loaded,
+      date,
+      time,
+      editId,
+      estimateError,
+      error,
+    };
+    entryGen.current += 1;
+    estimateAbort.current?.abort();
+    flight.finish();
+    setEstimating(false);
+    suppressEdit.current = true;
+    appliedEdit.current = null;
+    draft.current = { note: "", photo: null, ai: null };
+    if (fileRef.current) fileRef.current.value = "";
+    setForm(emptyForm);
+    setAiImage(null);
+    setLoaded(null);
+    setEstimateError(null);
+    setError(null);
+    const now = new Date();
+    const today = civilDate(now);
+    setDate(today);
+    setTime(timeValue(now));
+    if (editId) go(`/food?date=${encodeURIComponent(today)}`, { replace: true, keepScroll: true });
+    reassertMainScroll();
+    toast({
+      text: "Cleared",
+      undo: () => {
+        beginMainScrollHold();
+        entryGen.current += 1;
+        estimateAbort.current?.abort();
+        draft.current = { note: snapshot.form.note, photo: snapshot.form.photo, ai: snapshot.aiImage };
+        suppressEdit.current = true;
+        appliedEdit.current = snapshot.editId;
+        setForm(snapshot.form);
+        setAiImage(snapshot.aiImage);
+        setLoaded(snapshot.loaded);
+        setDate(snapshot.date);
+        setTime(snapshot.time);
+        setEstimateError(snapshot.estimateError);
+        setError(snapshot.error);
+        if (snapshot.editId) {
+          const day = snapshot.date ? `?edit=${encodeURIComponent(snapshot.editId)}&date=${encodeURIComponent(snapshot.date)}` : `?edit=${encodeURIComponent(snapshot.editId)}`;
+          go(`/food${day}`, { replace: true, keepScroll: true });
+        }
+        reassertMainScroll();
+      },
+    });
+  }
+
   async function deleteFavorite(id: string) {
     setError(null);
     try {
@@ -389,7 +464,13 @@ export function FoodScreen({ search }: { search: URLSearchParams }) {
       <section className="card" ref={estimateRef}>
         <div className="split-head">
           <h2>{form.name.trim() || "Meal"}</h2>
-          <p className="quiet">Estimate, edit anything</p>
+          {mealEntryIsBlank({ ...form, estimateImage: aiImage }) ? (
+            <p className="quiet">Estimate, edit anything</p>
+          ) : (
+            <button type="button" className="hint-action" onClick={clearEntry}>
+              Clear
+            </button>
+          )}
         </div>
         <label className="field">
           <span>Name</span>

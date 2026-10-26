@@ -13,6 +13,7 @@ import {
   dayDoneLine,
   shouldCelebrate,
   suggestedDayId,
+  mealEntryIsBlank,
   usualActionLabel,
   todayFocus,
   weekDayStatuses,
@@ -204,6 +205,25 @@ test("today keeps the workout finished on the Boise day, then moves on tomorrow"
   assert.equal(shouldCelebrate(false, false), true);
   assert.equal(shouldCelebrate(true, false), false);
   assert.equal(shouldCelebrate(false, true), false);
+});
+
+test("the meal hint stays until a photo, note, or field is filled", () => {
+  const blank = {
+    name: " ",
+    calories: "",
+    protein: "",
+    carbs: "",
+    fat: "",
+    note: " \n",
+    photo: null,
+    estimateImage: null,
+  };
+  assert.equal(mealEntryIsBlank(blank), true);
+  assert.equal(mealEntryIsBlank({ ...blank, name: "Oats" }), false);
+  assert.equal(mealEntryIsBlank({ ...blank, note: "rice" }), false);
+  assert.equal(mealEntryIsBlank({ ...blank, calories: "0" }), false);
+  assert.equal(mealEntryIsBlank({ ...blank, photo: "data:image/jpeg;base64,aa" }), false);
+  assert.equal(mealEntryIsBlank({ ...blank, estimateImage: "data:image/jpeg;base64,aa" }), false);
 });
 
 test("a filled usual updates the saved meal only as an explicit rename of the button", () => {

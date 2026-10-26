@@ -220,6 +220,32 @@ export function shouldCelebrate(alreadySeen: boolean, reduceMotion: boolean): bo
   return !alreadySeen && !reduceMotion;
 }
 
+export type MealEntryFields = {
+  name: string;
+  calories: string;
+  protein: string;
+  carbs: string;
+  fat: string;
+  note: string;
+  photo: string | null;
+  estimateImage?: string | null;
+};
+
+/** The meal card keeps its hint until a photo, note, or any meal field has something in it. */
+export function mealEntryIsBlank(entry: MealEntryFields): boolean {
+  const blank = (value: string | null | undefined) => !value || value.trim() === "";
+  return (
+    blank(entry.photo) &&
+    blank(entry.estimateImage) &&
+    blank(entry.note) &&
+    blank(entry.name) &&
+    blank(entry.calories) &&
+    blank(entry.protein) &&
+    blank(entry.carbs) &&
+    blank(entry.fat)
+  );
+}
+
 export type UsualSnapshot = {
   name: string;
   calories: number;
