@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { api, messageOf } from "../api";
 import type { WeightDTO } from "../../shared/types";
+import { reassertMainScroll } from "../scroll";
 import { Banner, TrendChart } from "../ui";
 
 export function WeightScreen() {
@@ -39,10 +40,12 @@ export function WeightScreen() {
       });
       setData(next);
       if (next.today != null) setWeight(String(next.today));
+      reassertMainScroll();
     } catch (err) {
       setError(messageOf(err));
     } finally {
       setBusy(false);
+      reassertMainScroll();
     }
   }
 

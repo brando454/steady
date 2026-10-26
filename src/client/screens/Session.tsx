@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type MutableRefObject } from "react";
 import { createPortal } from "react-dom";
 import { api, messageOf } from "../api";
 import type { GlucoseDTO, SessionDTO, SessionExerciseDTO, SetDTO } from "../../shared/types";
-import { rememberMainScroll, restoreArmed, useRestoreMainScroll } from "../scroll";
+import { alignToTopOfMain, reassertMainScroll, rememberMainScroll, restoreArmed, revealCurrentSet, shouldRevealCurrentSet, useRestoreMainScroll } from "../scroll";
 import { Back, Banner, Confirm, TrendArrow, useNav, useNow } from "../ui";
 
 type Draft = { weight: string; reps: string; minutes: string; note: string };
@@ -118,6 +118,7 @@ export function SessionScreen({ sessionId }: { sessionId: string }) {
   const [busy, setBusy] = useState(false);
   const [ask, setAsk] = useState<null | "finish" | "discard">(null);
   const patchTimer = useRef<number | null>(null);
+  const revealedSession = useRef<string | null>(null);
   const buzzed = useRef(false);
   const glucoseCard = useRef<HTMLElement | null>(null);
   const [glucosePinned, setGlucosePinned] = useState(false);
@@ -178,8 +179,10 @@ export function SessionScreen({ sessionId }: { sessionId: string }) {
   }, []);
 
   useEffect(() => {
-    if (!currentId || restoreArmed(sessionKey)) return;
-    document.querySelector(`[data-set="${currentId}"]`)?.scrollIntoView({ block: "nearest" });
+    if (!currentId) return;
+    const alreadyShown = revealedSession.current === sessionKey;
+    if (!alreadyShown) revealedSession.current = sessionKey;
+    if (shouldRevealCurrentSet(alreadyShown, restoreArmed(sessionKey))) revealCurrentSet(currentId);
   }, [currentId, sessionKey]);
 
   useRestoreMainScroll(sessionKey, Boolean(session) && glucoseReady);
@@ -261,10 +264,12 @@ export function SessionScreen({ sessionId }: { sessionId: string }) {
         setRest({ ends: Date.now() + seconds * 1000 });
       }
       remember(next);
+      reassertMainScroll();
     } catch (err) {
       setError(messageOf(err));
     } finally {
       setBusy(false);
+      reassertMainScroll();
     }
   }
 
@@ -274,10 +279,12 @@ export function SessionScreen({ sessionId }: { sessionId: string }) {
     try {
       const next = await api<SessionDTO>(path, { method });
       remember(next, prefer);
+      reassertMainScroll();
     } catch (err) {
       setError(messageOf(err));
     } finally {
       setBusy(false);
+      reassertMainScroll();
     }
   }
 
@@ -411,7 +418,10 @@ export function SessionScreen({ sessionId }: { sessionId: string }) {
               type="button"
               className={`glucose-pill${glucoseTone}`}
               tabIndex={glucosePinned ? 0 : -1}
-              onClick={() => document.getElementById("glucose")?.scrollIntoView({ behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" })}
+              onClick={() => {
+                const card = document.getElementById("glucose");
+                if (card) alignToTopOfMain(card);
+              }}
             >
               <strong>{reading.mgdl}</strong>
               <TrendArrow arrow={reading.arrow} />
@@ -646,30 +656,29 @@ function MiniStepper({
       <button type="button" aria-label={`Decrease ${label}`} disabled={disabled} onClick={() => onStep(-1, commit(text))}>
         −
       </button>
-      {disabled ? (
-        <strong>{display}</strong>
-      ) : (
-        <input
-          aria-label={label}
-          inputMode={decimal ? "decimal" : "numeric"}
-          pattern="[0-9]*"
-          enterKeyHint="done"
-          placeholder={placeholder}
-          value={text}
-          onChange={(event) => setText(clean(event.target.value))}
-          onFocus={(event) => {
-            onFocus?.();
-            event.currentTarget.select();
-          }}
-          onBlur={() => finish(text)}
-          onKeyDown={(event) => {
-            if (event.key === "Enter") {
-              event.preventDefault();
-              event.currentTarget.blur();
-            }
-          }}
-        />
-      )}
+      <input
+        aria-label={label}
+        inputMode={decimal ? "decimal" : "numeric"}
+        pattern="[0-9]*"
+        enterKeyHint="done"
+        placeholder={placeholder}
+        value={text}
+        disabled={disabled}
+        hidden={disabled}
+        onChange={(event) => setText(clean(event.target.value))}
+        onFocus={(event) => {
+          onFocus?.();
+          event.currentTarget.select();
+        }}
+        onBlur={() => finish(text)}
+        onKeyDown={(event) => {
+          if (event.key === "Enter") {
+            event.preventDefault();
+            event.currentTarget.blur();
+          }
+        }}
+      />
+      {disabled ? <strong>{display}</strong> : null}
       {suffix && !disabled ? <span className="mini-unit">{suffix}</span> : null}
       <button type="button" aria-label={`Increase ${label}`} disabled={disabled} onClick={() => onStep(1, commit(text))}>
         +

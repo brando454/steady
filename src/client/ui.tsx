@@ -2,7 +2,7 @@ import { createContext, useContext, useEffect, useState, type ReactNode } from "
 import { createPortal } from "react-dom";
 import { chartScale } from "../shared/format";
 
-type Go = (to: string, opts?: { replace?: boolean; restoreScroll?: boolean }) => void;
+type Go = (to: string, opts?: { replace?: boolean; restoreScroll?: boolean; keepScroll?: boolean }) => void;
 type NavValue = { path: string; go: Go };
 export const NavContext = createContext<NavValue>({ path: "/", go: () => {} });
 export function useNav() {
