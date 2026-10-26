@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { api, messageOf } from "../api";
 import type { GlucoseDTO, SettingsDTO } from "../../shared/types";
 import { glucoseStatusText } from "../../shared/glucose";
+import { reassertMainScroll } from "../scroll";
 import { Back, Banner, Confirm, useToast } from "../ui";
 
 type Form = {
@@ -91,11 +92,13 @@ export function SettingsScreen({ onLock }: { onLock: () => void }) {
       });
       setForm(fromSettings(settings));
       setRampNote(settings.rampNote);
+      reassertMainScroll();
       toast({ text: "Settings saved" });
     } catch (err) {
       setError(messageOf(err));
     } finally {
       setBusy(false);
+      reassertMainScroll();
     }
   }
 

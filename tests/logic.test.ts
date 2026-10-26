@@ -10,7 +10,10 @@ import {
   macrosLeft,
   rampForDate,
   sevenDayAverage,
+  dayDoneLine,
+  shouldCelebrate,
   suggestedDayId,
+  todayFocus,
   weekDayStatuses,
   weightHint,
   widgetToday,
@@ -137,6 +140,69 @@ test("the training week resets every Monday and old unfinished days do not pile 
   );
   assert.equal(resumed[0].status, "in_progress");
   assert.equal(suggestedDayId(resumed), "a");
+});
+
+test("today keeps the workout finished on the Boise day, then moves on tomorrow", () => {
+  const statuses = [
+    { dayId: "push", status: "done" as const },
+    { dayId: "pull", status: "todo" as const },
+    { dayId: "legs", status: "todo" as const },
+  ];
+  const finished = [{ dayId: "push", sessionId: "session-1" }];
+  const late = new Date("2026-10-27T05:30:00.000Z");
+  const nextMorning = new Date("2026-10-27T06:30:00.000Z");
+  assert.equal(civilDate(late), "2026-10-26");
+  assert.equal(civilDate(nextMorning), "2026-10-27");
+
+  assert.deepEqual(todayFocus(statuses, finished), {
+    dayId: "push",
+    sessionId: "session-1",
+    completedToday: true,
+  });
+  assert.deepEqual(todayFocus(statuses, []), {
+    dayId: "pull",
+    sessionId: null,
+    completedToday: false,
+  });
+  assert.deepEqual(
+    todayFocus(
+      [
+        { dayId: "push", status: "done" },
+        { dayId: "pull", status: "in_progress" },
+      ],
+      finished,
+    ),
+    { dayId: "pull", sessionId: null, completedToday: false },
+  );
+  assert.deepEqual(
+    todayFocus(
+      [
+        { dayId: "push", status: "done" },
+        { dayId: "pull", status: "done" },
+      ],
+      [
+        { dayId: "pull", sessionId: "later" },
+        { dayId: "push", sessionId: "earlier" },
+      ],
+    ),
+    { dayId: "pull", sessionId: "later", completedToday: true },
+  );
+  assert.equal(
+    todayFocus(
+      [
+        { dayId: "push", status: "done" },
+        { dayId: "pull", status: "done" },
+      ],
+      [],
+    ),
+    null,
+  );
+  assert.equal(dayDoneLine(12, 2), "12 sets · 2 new PRs");
+  assert.equal(dayDoneLine(1, 1), "1 set · 1 new PR");
+  assert.equal(dayDoneLine(8, 0), "8 sets");
+  assert.equal(shouldCelebrate(false, false), true);
+  assert.equal(shouldCelebrate(true, false), false);
+  assert.equal(shouldCelebrate(false, true), false);
 });
 
 test("Boise civil dates pick the Monday week across the UTC offset", () => {

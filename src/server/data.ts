@@ -13,7 +13,9 @@ import {
   rampForDate,
   round1,
   sevenDayAverage,
+  dayDoneLine,
   suggestedDayId,
+  todayFocus,
   weekDayStatuses,
   weightHint,
   type Macros,
@@ -317,16 +319,45 @@ export async function getToday(): Promise<TodayDTO> {
   const meals = await mealsOn(today);
   const totals = dailyTotals(meals);
   const targets = targetsOf(settings);
-  const suggested = week.days.find((day) => day.suggested) ?? null;
-  const slots = suggested
-    ? await rows<SlotRow>(
-        pool,
-        `SELECT pe.*, e.name, e.pattern_key, e.pattern_label, e.muscles
-         FROM program_exercises pe JOIN exercises e ON e.id = pe.exercise_id
-         WHERE pe.day_id = $1 ORDER BY pe.sort_order`,
-        [suggested.id],
-      )
-    : [];
+  const finishedToday = await rows<{ id: string; day_id: string }>(
+    pool,
+    `SELECT id, day_id
+     FROM sessions
+     WHERE completed_at IS NOT NULL
+       AND (completed_at AT TIME ZONE 'America/Boise')::date = $1::date
+     ORDER BY completed_at DESC`,
+    [today],
+  );
+  const focus = todayFocus(
+    week.days.map((day) => ({ dayId: day.id, status: day.status })),
+    finishedToday.map((session) => ({ dayId: session.day_id, sessionId: session.id })),
+  );
+  const selected = focus ? (week.days.find((day) => day.id === focus.dayId) ?? null) : null;
+  const slots =
+    selected && focus && !focus.completedToday
+      ? await rows<SlotRow>(
+          pool,
+          `SELECT pe.*, e.name, e.pattern_key, e.pattern_label, e.muscles
+           FROM program_exercises pe JOIN exercises e ON e.id = pe.exercise_id
+           WHERE pe.day_id = $1 ORDER BY pe.sort_order`,
+          [selected.id],
+        )
+      : [];
+  let prCount = 0;
+  let setCount = 0;
+  if (focus?.completedToday && focus.sessionId) {
+    const tally = await rows<{ sets: number; prs: number }>(
+      pool,
+      `SELECT COUNT(*) FILTER (WHERE st.logged_at IS NOT NULL)::int AS sets,
+              COUNT(*) FILTER (WHERE st.is_pr)::int AS prs
+       FROM sets st
+       JOIN session_exercises sx ON sx.id = st.session_exercise_id
+       WHERE sx.session_id = $1`,
+      [focus.sessionId],
+    );
+    setCount = Number(tally[0]?.sets ?? 0);
+    prCount = Number(tally[0]?.prs ?? 0);
+  }
   return {
     date: today,
     dateLabel: longCivil(today),
@@ -335,15 +366,19 @@ export async function getToday(): Promise<TodayDTO> {
     totals,
     left: macrosLeft(totals, targets),
     meals,
-    suggestion: suggested
+    suggestion: selected && focus
       ? {
-          dayId: suggested.id,
-          name: suggested.name,
-          status: suggested.status,
-          sessionId: suggested.sessionId,
-          rampNote: week.rampNote,
-          summary: suggested.summary,
+          dayId: selected.id,
+          name: selected.name,
+          status: focus.completedToday ? "done" : selected.status,
+          sessionId: focus.completedToday ? focus.sessionId : selected.sessionId,
+          rampNote: focus.completedToday ? null : week.rampNote,
+          summary: selected.summary,
           lines: slots.map((slot) => prescriptionLine(slot.name, slot.sets, slot.reps_label, slot.is_cardio, slot.notes)),
+          completedToday: focus.completedToday,
+          prCount,
+          setCount,
+          resultLine: focus.completedToday ? dayDoneLine(setCount, prCount) : "",
         }
       : null,
     weekDone: week.doneCount,

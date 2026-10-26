@@ -181,6 +181,45 @@ export function suggestedDayId(statuses: { dayId: string; status: DayStatus }[])
   return statuses.find((status) => status.status !== "done")?.dayId ?? null;
 }
 
+export type TodayFocus = {
+  dayId: string;
+  sessionId: string | null;
+  /** Finished on the current America/Boise civil day. Tomorrow this becomes the next workout. */
+  completedToday: boolean;
+};
+
+/**
+ * Today shows the workout finished on this Boise day until the date changes.
+ * An open session still wins, so a resume is not covered by an earlier finish.
+ * `completedToday` must be newest first and already filtered to the Boise civil date.
+ */
+export function todayFocus(
+  statuses: { dayId: string; status: DayStatus }[],
+  completedToday: { dayId: string; sessionId: string }[],
+): TodayFocus | null {
+  const open = statuses.find((status) => status.status === "in_progress");
+  if (open) return { dayId: open.dayId, sessionId: null, completedToday: false };
+  const done = completedToday.find((item) => statuses.some((status) => status.dayId === item.dayId));
+  if (done) return { dayId: done.dayId, sessionId: done.sessionId, completedToday: true };
+  const next = suggestedDayId(statuses);
+  if (!next) return null;
+  return { dayId: next, sessionId: null, completedToday: false };
+}
+
+export function dayDoneLine(sets: number, prs: number): string {
+  const parts: string[] = [];
+  if (sets === 1) parts.push("1 set");
+  else if (sets > 1) parts.push(`${sets} sets`);
+  if (prs === 1) parts.push("1 new PR");
+  else if (prs > 1) parts.push(`${prs} new PRs`);
+  return parts.join(" · ");
+}
+
+/** The burst plays once, the first time this finish is seen, and never when motion is reduced. */
+export function shouldCelebrate(alreadySeen: boolean, reduceMotion: boolean): boolean {
+  return !alreadySeen && !reduceMotion;
+}
+
 export type Ramp = {
   startDate: string;
   weeks: { offset: number; percent: number }[];

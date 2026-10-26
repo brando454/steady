@@ -3,6 +3,7 @@ import { api, compressImage, formatInt, formatQty, messageOf } from "../api";
 import { createFlightGuard } from "../../shared/flight";
 import { timeValue } from "../../shared/time";
 import type { FavoriteDTO, FoodDayDTO, MealDTO } from "../../shared/types";
+import { reassertMainScroll } from "../scroll";
 import { Banner, Confirm, useNav, useToast } from "../ui";
 
 type FormState = {
@@ -182,11 +183,13 @@ export function FoodScreen({ search }: { search: URLSearchParams }) {
       const body = payload();
       await api("/api/favorites", { method: "POST", body: JSON.stringify(body) });
       await reload();
+      reassertMainScroll();
       toast({ text: "Saved as usual" });
     } catch (err) {
       setError(messageOf(err));
     } finally {
       setBusy(false);
+      reassertMainScroll();
     }
   }
 
@@ -198,18 +201,20 @@ export function FoodScreen({ search }: { search: URLSearchParams }) {
       if (editId) {
         await api(`/api/meals/${editId}`, { method: "PUT", body: JSON.stringify(body) });
         appliedEdit.current = null;
-        go(`/food?date=${body.date}`, { replace: true });
+        go(`/food?date=${body.date}`, { replace: true, keepScroll: true });
       } else {
         await api("/api/meals", { method: "POST", body: JSON.stringify(body) });
         setForm(emptyForm);
         setAiImage(null);
       }
       await reload();
+      reassertMainScroll();
       toast({ text: editId ? "Meal updated" : "Meal logged" });
     } catch (err) {
       setError(messageOf(err));
     } finally {
       setBusy(false);
+      reassertMainScroll();
     }
   }
 
@@ -223,6 +228,7 @@ export function FoodScreen({ search }: { search: URLSearchParams }) {
         body: JSON.stringify({ date: day, time: when }),
       });
       await reload();
+      reassertMainScroll();
       toast({
         text: `Logged ${meal.name}`,
         undo: () => {
@@ -244,14 +250,16 @@ export function FoodScreen({ search }: { search: URLSearchParams }) {
       if (editId === removeId) {
         appliedEdit.current = null;
         setForm(emptyForm);
-        go(`/food?date=${date}`, { replace: true });
+        go(`/food?date=${date}`, { replace: true, keepScroll: true });
       }
       setRemoveId(null);
       await reload();
+      reassertMainScroll();
     } catch (err) {
       setError(messageOf(err));
     } finally {
       setBusy(false);
+      reassertMainScroll();
     }
   }
 
