@@ -7,6 +7,7 @@ import {
   COOKIE,
   clearCookie,
   rateLimit,
+  bearerToken,
   presentedWidgetToken,
   secretsMatch,
   sessionCookie,
@@ -26,6 +27,7 @@ import {
   exerciseHistory,
   finishSession,
   foodDay,
+  getProgram,
   getSession,
   getSettings,
   getToday,
@@ -68,6 +70,12 @@ function secureCookie(req: Request): boolean {
   return Boolean(req.secure || process.env.NODE_ENV === "production");
 }
 
+function readSession(req: Request): string {
+  const bearer = bearerToken(req.get("authorization"));
+  if (bearer) return bearer;
+  return cookieValue(req.headers.cookie, COOKIE) ?? "";
+}
+
 export function createApp(passcode: string) {
   const app = express();
   app.disable("x-powered-by");
@@ -106,8 +114,9 @@ export function createApp(passcode: string) {
         res.status(401).json({ error: "Wrong passcode" });
         return;
       }
-      res.setHeader("Set-Cookie", sessionCookie(signSession(passcode), secureCookie(req)));
-      res.json({ ok: true });
+      const token = signSession(passcode);
+      res.setHeader("Set-Cookie", sessionCookie(token, secureCookie(req)));
+      res.json({ ok: true, token });
     }),
   );
 
@@ -117,7 +126,7 @@ export function createApp(passcode: string) {
   });
 
   app.get("/api/auth/me", (req, res) => {
-    const token = cookieValue(req.headers.cookie, COOKIE);
+    const token = readSession(req);
     if (!token || !verifySession(token, passcode)) {
       res.status(401).json({ error: "Locked" });
       return;
@@ -162,7 +171,7 @@ export function createApp(passcode: string) {
   );
 
   app.use("/api", (req, res, next) => {
-    const token = cookieValue(req.headers.cookie, COOKIE);
+    const token = readSession(req);
     if (!token || !verifySession(token, passcode)) {
       res.status(401).json({ error: "Locked" });
       return;
@@ -172,6 +181,7 @@ export function createApp(passcode: string) {
   });
 
   app.get("/api/today", asyncRoute(async (_req, res) => res.json(await getToday())));
+  app.get("/api/program", asyncRoute(async (_req, res) => res.json(await getProgram())));
   app.get("/api/week", asyncRoute(async (_req, res) => res.json(await getWeek())));
   app.get("/api/settings", asyncRoute(async (_req, res) => res.json(await getSettings())));
   app.put("/api/settings", asyncRoute(async (req, res) => res.json(await saveSettings(req.body ?? {}))));

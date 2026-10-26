@@ -26,7 +26,12 @@ export function verifySession(token: string, passcode: string, now = Date.now())
   }
 }
 
-/** Bearer token, or the `token` query when the header is absent or empty. */
+/** Session token from `Authorization: Bearer`, used by the native app. Empty when the header is not a bearer token. */
+export function bearerToken(authorization: string | undefined): string {
+  const match = /^Bearer\s+(\S+)$/i.exec((authorization ?? "").trim());
+  return match?.[1]?.trim() ?? "";
+}
+
 export function presentedWidgetToken(authorization: string | undefined, queryToken: unknown): string {
   const header = authorization ?? "";
   const match = /^Bearer\s+(\S.*)$/i.exec(header);

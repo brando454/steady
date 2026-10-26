@@ -7,3 +7,8 @@ dist
 playwright-report
 test-results
 /tmp
+ios/build/
+ios/Steady.xcodeproj/
+DerivedData/
+*.ipa
+*.xcarchive
