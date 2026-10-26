@@ -1,4 +1,5 @@
 import type { Macros, Ramp } from "./logic";
+import type { WorkoutGlucose } from "./workoutGlucose";
 
 export type MealDTO = {
   id: string;
@@ -68,6 +69,8 @@ export type SessionDTO = {
   weekStart: string;
   rampNote: string | null;
   exercises: SessionExerciseDTO[];
+  /** Set once the session is finished. Null while the workout is still open. */
+  glucose: WorkoutGlucose | null;
 };
 
 export type DayDTO = {
@@ -120,6 +123,7 @@ export type TodayDTO = {
     prCount: number;
     setCount: number;
     resultLine: string;
+    glucose: WorkoutGlucose | null;
   };
   weekDone: number;
   weekTotal: number;

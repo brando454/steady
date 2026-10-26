@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { api, formatInt, formatQty, messageOf } from "../api";
 import type { SessionDTO, TodayDTO } from "../../shared/types";
 import { shouldCelebrate } from "../../shared/logic";
+import { WorkoutGlucoseView } from "../WorkoutGlucose";
 import { Banner, Macro, Ring, useNav } from "../ui";
 
 export function TodayScreen() {
@@ -23,6 +24,28 @@ export function TodayScreen() {
       stop = true;
     };
   }, []);
+
+  useEffect(() => {
+    if (!today?.suggestion?.glucose?.inProgress) return;
+    let stop = false;
+    const load = () => {
+      api<TodayDTO>("/api/today")
+        .then((data) => {
+          if (!stop) setToday(data);
+        })
+        .catch(() => undefined);
+    };
+    const id = window.setInterval(load, 60_000);
+    const onVisible = () => {
+      if (document.visibilityState === "visible") load();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      stop = true;
+      window.clearInterval(id);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
+  }, [today?.suggestion?.sessionId, today?.suggestion?.glucose?.inProgress]);
 
   async function start(dayId: string) {
     setBusy(true);
@@ -168,6 +191,7 @@ function CompletedToday({
         </div>
       </div>
       {suggestion.resultLine && <p className="quiet">{suggestion.resultLine}</p>}
+      {suggestion.glucose && <WorkoutGlucoseView summary={suggestion.glucose} />}
       {suggestion.summary && <p className="quiet">{suggestion.summary}</p>}
       {suggestion.sessionId && (
         <button type="button" className="secondary" onClick={onView}>

@@ -567,6 +567,28 @@ textarea { min-height: 88px; resize: vertical; }
 .glucose-pill.low { background: color-mix(in srgb, var(--warn) 22%, var(--card)); color: var(--warn); }
 .glucose-pill.high { background: color-mix(in srgb, var(--danger) 18%, var(--card)); color: var(--danger); }
 .glucose-pill .ago { font-weight: 400; font-size: 11px; color: var(--muted); }
+
+.wg { display: grid; gap: 8px; }
+.wg-head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+.wg-spark { width: 100%; height: 36px; display: block; }
+.wg-shade { fill: color-mix(in srgb, var(--accent) 16%, transparent); }
+.wg-line { fill: none; stroke: var(--text); stroke-width: 1.6; stroke-linejoin: round; stroke-linecap: round; }
+.wg-dot { fill: var(--text); }
+.wg-stats {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr)) auto;
+  gap: 6px;
+  align-items: end;
+}
+.wg-stat { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.wg-stat .k { font-size: 11px; color: var(--muted); }
+.wg-stat .v { font-size: 15px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.wg-stat.after .glucose-pill {
+  align-self: flex-start;
+  min-height: 26px;
+  padding: 2px 8px;
+  font-size: 15px;
+}
 .glucose-pin-name {
   flex: 1;
   min-width: 0;

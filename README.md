@@ -95,7 +95,7 @@ The always-on web plan `0.5c-512mb` (legacy name `starter`) is **$7 per month** 
 
 `GET /api/coach/review?from=YYYY-MM-DD&to=YYYY-MM-DD`
 
-Send `Authorization: Bearer $COACH_API_TOKEN`. Dates are America/Boise civil dates, and the range can be at most 120 days. The JSON includes meals (no photos), daily totals against targets, workouts with sets, personal records, and weigh-ins. It does not include glucose.
+Send `Authorization: Bearer $COACH_API_TOKEN`. Dates are America/Boise civil dates, and the range can be at most 120 days. The JSON includes meals (no photos), daily totals against targets, workouts with sets, personal records, weigh-ins, and a glucose summary on each finished workout. Glucose values are mg/dL. An unfinished workout has `glucose: null`.
 
 ```bash
 curl -sS \
@@ -139,6 +139,8 @@ GET {NIGHTSCOUT_URL}/api/v1/entries.json?token=...&count=1
 ```
 
 That request is a GET. Steady never writes to Nightscout or to Loop. If Nightscout is not configured or cannot be reached, the glucose card is hidden and Settings says why. A reading older than 15 minutes still shows, marked as older than 15 minutes. The card is a reading and a trend only. Under about 120 mg/dL, and only while cardio is still ahead, it adds one line: have a low snack handy. It does not suggest insulin doses. Carbs for a meal are shown so they can be typed into Loop by hand.
+
+A finished workout also reads the sensor glucose from the start of the session through two hours after it ends. That is another GET, for the entries in that window. The session screen and the Day done card show the value at the start, at the end, the average and lowest during the workout, and the lowest in the two hours after. The two-hour low uses the same amber and red as the live glucose pill: under 120, and over 180. A small sparkline covers the whole window, with the workout itself shaded, and breaks where readings are more than about 12 minutes apart. While those two hours are still open, the summary says it is in progress and fills in as readings arrive. Once the window closes, Steady stores the summary on the session so it remains if Nightscout later drops the old entries. A failed read is not stored. Missing readings stay blank.
 
 ## Meal estimates
 
