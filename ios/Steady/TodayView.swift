@@ -124,6 +124,9 @@ private struct CompletedTodayCard: View {
           .font(.system(size: 13))
           .foregroundStyle(Theme.muted)
       }
+      if let glucose = suggestion.glucose {
+        WorkoutGlucoseSummary(summary: glucose)
+      }
       if !suggestion.summary.isEmpty {
         Text(suggestion.summary)
           .font(.system(size: 13))

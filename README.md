@@ -157,3 +157,33 @@ A personal record is a heavier weight at the same reps, or a higher estimated on
 ## Access
 
 The passcode is checked once. A valid login sets an HttpOnly cookie (`steady_session`) for about a year, `SameSite=Lax`, and `Secure` in production. Logging out, or "Forget this phone" in Settings, clears it. The coach token and the widget token cannot be used as that cookie, and the cookie cannot call those APIs.
+
+## iPhone
+
+The native app is in `ios/`. It talks to the same Render service, keeps the passcode in the Keychain, and can log a workout while the gym has no signal. It does not write to Nightscout, Loop, or HealthKit. A finished workout shows the same glucose summary as the phone site once the server sends it: start, end, average, lowest during, and the lowest in the two hours after, plus a small sparkline. mg/dL only.
+
+The home-screen widget is small and medium. A tap opens Food (`steady://food`). The rest timer can show a Live Activity and plays a short sound when rest ends.
+
+### One-time Apple and GitHub setup
+
+1. Enroll in the Apple Developer Program.
+2. Register two App IDs: `com.brando454.steady` and `com.brando454.steady.widget`. Turn on App Groups for both.
+3. Create the App Group `group.com.brando454.steady` and add it to both IDs.
+4. In App Store Connect, create the app Steady with bundle ID `com.brando454.steady`. Pick any SKU.
+5. Create an App Store Connect API key with Admin access. Save the Key ID, the Issuer ID, and the `.p8` file. The `.p8` downloads once. Base64-encode that file for the secret below.
+6. Create an Apple Distribution certificate, export it as a `.p12` with a password, and base64-encode the `.p12`.
+
+Add these GitHub Actions secrets on the repository. The names are the whole secret. Put the values in GitHub, not in the repo.
+
+| Secret | Value |
+| --- | --- |
+| `APP_STORE_CONNECT_KEY_ID` | API key ID |
+| `APP_STORE_CONNECT_ISSUER_ID` | Issuer ID |
+| `APP_STORE_CONNECT_KEY_P8` | Base64 of the `.p8` file |
+| `APPLE_TEAM_ID` | Team ID |
+| `IOS_DISTRIBUTION_P12_BASE64` | Base64 of the distribution `.p12` |
+| `IOS_DISTRIBUTION_P12_PASSWORD` | Password for that `.p12` |
+
+`.github/workflows/ios-testflight.yml` runs on every push to `main`, and when you start it by hand. It always compiles with signing turned off. The build number is the GitHub run number. If the six secrets are set, it archives with automatic signing and uploads to TestFlight. A push that does not have the secrets still compiles and does not upload. Starting the workflow by hand without the secrets fails, so a missing secret is obvious.
+
+The week still resets on Monday. The server stays on Render.

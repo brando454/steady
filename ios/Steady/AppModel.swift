@@ -1072,7 +1072,8 @@ final class AppModel: ObservableObject {
       completedAt: nil,
       weekStart: Boise.weekStart(Boise.civil()),
       rampNote: week?.rampNote,
-      exercises: exercises
+      exercises: exercises,
+      glucose: nil
     )
   }
 
@@ -1108,11 +1109,25 @@ final class AppModel: ObservableObject {
     }
   }
 
-  private func refreshGlucose() async {
+  func glucoseStatusText() async -> String {
     do {
-      glucose = try await api.glucose()
+      return try await api.glucose().statusText
     } catch {
-      return
+      return "Couldn't check Nightscout"
+    }
+  }
+
+  private func refreshGlucose() async {
+    if let reading = try? await api.glucose() {
+      glucose = reading
+    }
+    if let current = session, current.glucose?.inProgress == true, !current.isLocal {
+      if let next = try? await api.session(current.id) {
+        session = next
+      }
+    }
+    if today?.suggestion?.glucose?.inProgress == true {
+      await refreshToday()
     }
   }
 

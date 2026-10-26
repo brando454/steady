@@ -1,0 +1,128 @@
+name: iOS TestFlight
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  ios:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Generate the Xcode project
+        run: brew install xcodegen && (cd ios && xcodegen generate)
+
+      - name: Compile
+        run: |
+          cd ios
+          xcodebuild \
+            -project Steady.xcodeproj \
+            -scheme Steady \
+            -destination 'generic/platform=iOS' \
+            -configuration Release \
+            CODE_SIGNING_ALLOWED=NO \
+            CURRENT_PROJECT_VERSION="${{ github.run_number }}" \
+            build
+
+      - name: Signing secrets
+        id: secrets
+        env:
+          APP_STORE_CONNECT_KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
+          APP_STORE_CONNECT_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
+          APP_STORE_CONNECT_KEY_P8: ${{ secrets.APP_STORE_CONNECT_KEY_P8 }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          IOS_DISTRIBUTION_P12_BASE64: ${{ secrets.IOS_DISTRIBUTION_P12_BASE64 }}
+          IOS_DISTRIBUTION_P12_PASSWORD: ${{ secrets.IOS_DISTRIBUTION_P12_PASSWORD }}
+        run: |
+          set -euo pipefail
+          ready=true
+          for name in APP_STORE_CONNECT_KEY_ID APP_STORE_CONNECT_ISSUER_ID APP_STORE_CONNECT_KEY_P8 APPLE_TEAM_ID IOS_DISTRIBUTION_P12_BASE64 IOS_DISTRIBUTION_P12_PASSWORD; do
+            if [ -z "${!name}" ]; then
+              echo "$name is not set"
+              ready=false
+            fi
+          done
+          echo "ready=$ready" >> "$GITHUB_OUTPUT"
+
+      - name: Stop when a manual run has no signing secrets
+        if: github.event_name == 'workflow_dispatch' && steps.secrets.outputs.ready != 'true'
+        run: |
+          echo "Add the six GitHub secrets, then run this again."
+          exit 1
+
+      - name: Upload to TestFlight
+        if: steps.secrets.outputs.ready == 'true'
+        env:
+          APP_STORE_CONNECT_KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
+          APP_STORE_CONNECT_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
+          APP_STORE_CONNECT_KEY_P8: ${{ secrets.APP_STORE_CONNECT_KEY_P8 }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          IOS_DISTRIBUTION_P12_BASE64: ${{ secrets.IOS_DISTRIBUTION_P12_BASE64 }}
+          IOS_DISTRIBUTION_P12_PASSWORD: ${{ secrets.IOS_DISTRIBUTION_P12_PASSWORD }}
+        run: |
+          set -euo pipefail
+          KEYCHAIN="$RUNNER_TEMP/signing.keychain-db"
+          security create-keychain -p "" "$KEYCHAIN"
+          security default-keychain -s "$KEYCHAIN"
+          security unlock-keychain -p "" "$KEYCHAIN"
+          security set-keychain-settings "$KEYCHAIN"
+          echo "$IOS_DISTRIBUTION_P12_BASE64" | base64 -D > "$RUNNER_TEMP/distribution.p12"
+          security import "$RUNNER_TEMP/distribution.p12" -k "$KEYCHAIN" -P "$IOS_DISTRIBUTION_P12_PASSWORD" -T /usr/bin/codesign -T /usr/bin/security
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "" "$KEYCHAIN"
+          rm -f "$RUNNER_TEMP/distribution.p12"
+          mkdir -p "$HOME/private_keys"
+          echo "$APP_STORE_CONNECT_KEY_P8" | base64 -D > "$HOME/private_keys/AuthKey_${APP_STORE_CONNECT_KEY_ID}.p8"
+          chmod 600 "$HOME/private_keys/AuthKey_${APP_STORE_CONNECT_KEY_ID}.p8"
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+          team = os.environ["APPLE_TEAM_ID"]
+          Path(os.environ["RUNNER_TEMP"], "ExportOptions.plist").write_text(
+              """<?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>method</key>
+            <string>app-store-connect</string>
+            <key>signingStyle</key>
+            <string>automatic</string>
+            <key>teamID</key>
+            <string>"""
+              + team
+              + """</string>
+            <key>uploadSymbols</key>
+            <true/>
+          </dict>
+          </plist>
+          """
+          )
+          PY
+          cd ios
+          xcodebuild \
+            -project Steady.xcodeproj \
+            -scheme Steady \
+            -destination 'generic/platform=iOS' \
+            -configuration Release \
+            -archivePath "$RUNNER_TEMP/Steady.xcarchive" \
+            -allowProvisioningUpdates \
+            -authenticationKeyPath "$HOME/private_keys/AuthKey_${APP_STORE_CONNECT_KEY_ID}.p8" \
+            -authenticationKeyID "$APP_STORE_CONNECT_KEY_ID" \
+            -authenticationKeyIssuerID "$APP_STORE_CONNECT_ISSUER_ID" \
+            DEVELOPMENT_TEAM="$APPLE_TEAM_ID" \
+            CODE_SIGN_STYLE=Automatic \
+            CURRENT_PROJECT_VERSION="${{ github.run_number }}" \
+            archive
+          xcodebuild \
+            -exportArchive \
+            -archivePath "$RUNNER_TEMP/Steady.xcarchive" \
+            -exportPath "$RUNNER_TEMP/export" \
+            -exportOptionsPlist "$RUNNER_TEMP/ExportOptions.plist" \
+            -allowProvisioningUpdates \
+            -authenticationKeyPath "$HOME/private_keys/AuthKey_${APP_STORE_CONNECT_KEY_ID}.p8" \
+            -authenticationKeyID "$APP_STORE_CONNECT_KEY_ID" \
+            -authenticationKeyIssuerID "$APP_STORE_CONNECT_ISSUER_ID"
+          IPA="$(find "$RUNNER_TEMP/export" -name '*.ipa' -print -quit)"
+          test -n "$IPA"
+          xcrun altool --upload-app -f "$IPA" -t ios --apiKey "$APP_STORE_CONNECT_KEY_ID" --apiIssuer "$APP_STORE_CONNECT_ISSUER_ID"

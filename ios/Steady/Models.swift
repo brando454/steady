@@ -49,6 +49,7 @@ struct WorkoutSession: Codable, Identifiable, Hashable {
   var weekStart: String
   var rampNote: String?
   var exercises: [SessionExercise]
+  var glucose: WorkoutGlucose?
 
   var isLocal: Bool { id.hasPrefix("local-") }
 
@@ -164,10 +165,11 @@ struct TodaySuggestion: Codable, Hashable {
   var prCount: Int = 0
   var setCount: Int = 0
   var resultLine: String = ""
+  var glucose: WorkoutGlucose?
 
   enum CodingKeys: String, CodingKey {
     case dayId, name, status, sessionId, rampNote, summary, lines
-    case completedToday, prCount, setCount, resultLine
+    case completedToday, prCount, setCount, resultLine, glucose
   }
 
   init(from decoder: Decoder) throws {
@@ -183,6 +185,7 @@ struct TodaySuggestion: Codable, Hashable {
     prCount = try container.decodeIfPresent(Int.self, forKey: .prCount) ?? 0
     setCount = try container.decodeIfPresent(Int.self, forKey: .setCount) ?? 0
     resultLine = try container.decodeIfPresent(String.self, forKey: .resultLine) ?? ""
+    glucose = try container.decodeIfPresent(WorkoutGlucose.self, forKey: .glucose)
   }
 
   func encode(to encoder: Encoder) throws {
@@ -198,7 +201,26 @@ struct TodaySuggestion: Codable, Hashable {
     try container.encode(prCount, forKey: .prCount)
     try container.encode(setCount, forKey: .setCount)
     try container.encode(resultLine, forKey: .resultLine)
+    try container.encodeIfPresent(glucose, forKey: .glucose)
   }
+}
+
+struct WorkoutGlucosePoint: Codable, Hashable {
+  var minute: Double
+  var mgdl: Int
+}
+
+struct WorkoutGlucose: Codable, Hashable {
+  var inProgress: Bool
+  var unavailable: Bool
+  var startMgdl: Int?
+  var endMgdl: Int?
+  var averageMgdl: Int?
+  var lowDuringMgdl: Int?
+  var lowAfterMgdl: Int?
+  var workoutMinutes: Double
+  var windowMinutes: Double
+  var points: [WorkoutGlucosePoint]
 }
 
 struct Today: Codable {
@@ -342,6 +364,28 @@ struct Glucose: Codable {
   var minutesAgo: Int?
 
   var shows: Bool { mgdl != nil && (available || reason == "stale") }
+
+  var statusText: String {
+    if available, let mgdl {
+      let when = (minutesAgo ?? 0) == 0 ? "just now" : "\(minutesAgo ?? 0) min ago"
+      return "\(Int(mgdl.rounded())) mg/dL · \(when)"
+    }
+    if reason == "stale", let mgdl {
+      let when = (minutesAgo ?? 0) == 0 ? "just now" : "\(minutesAgo ?? 0) min ago"
+      return "\(Int(mgdl.rounded())) mg/dL · \(when). Older than 15 minutes."
+    }
+    if reason == "not_configured" {
+      let missing = detail ?? "NIGHTSCOUT_URL or NIGHTSCOUT_TOKEN"
+      return missing.contains(" and ") ? "\(missing) aren't set on the server" : "\(missing) isn't set on the server"
+    }
+    if let reason, reason.hasPrefix("http_") { return "Nightscout returned HTTP \(reason.dropFirst("http_".count))" }
+    if reason == "timeout" { return "Nightscout timed out" }
+    if reason == "network" {
+      return detail == nil ? "Couldn't reach Nightscout" : "Couldn't reach Nightscout (\(detail ?? ""))"
+    }
+    if reason == "bad_payload" { return "Nightscout's reply wasn't a reading" }
+    return "Nightscout isn't available"
+  }
 }
 
 struct SetDraft: Equatable {

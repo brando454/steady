@@ -56,7 +56,7 @@ final class RestController: NSObject, UNUserNotificationCenterDelegate {
     let content = UNMutableNotificationContent()
     content.title = "Rest done"
     content.body = name.isEmpty ? "Time for the next set." : name
-    content.sound = .default
+    content.sound = UNNotificationSound(named: UNNotificationSoundName("rest-done.wav"))
     let trigger = UNCalendarNotificationTrigger(
       dateMatching: Calendar.current.dateComponents([.year, .month, .day, .hour, .minute, .second], from: date),
       repeats: false

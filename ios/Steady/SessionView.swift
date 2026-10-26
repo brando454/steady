@@ -13,7 +13,13 @@ struct SessionView: View {
         QuietButton(title: "This week") { model.workoutPath = NavigationPath() }
         if let session = model.session, session.id == sessionId || model.session?.isLocal == true && sessionId.hasPrefix("local-") || model.session?.id == sessionId {
           header(session)
-          glucoseCard(session)
+          if session.completedAt != nil {
+            if let summary = session.glucose {
+              Card { WorkoutGlucoseSummary(summary: summary) }
+            }
+          } else {
+            glucoseCard(session)
+          }
           BannerText(text: model.banner)
           ForEach(session.exercises) { exercise in
             exerciseCard(session, exercise)
