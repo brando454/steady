@@ -1,12 +1,14 @@
 import { useEffect, useState } from "react";
 import { api, messageOf } from "../api";
 import type { ExerciseHistoryDTO, HistoryItem } from "../../shared/types";
+import { rememberMainScroll, useRestoreMainScroll } from "../scroll";
 import { Back, Banner, TrendChart, useNav } from "../ui";
 
 export function HistoryScreen() {
   const { go } = useNav();
   const [items, setItems] = useState<HistoryItem[] | null>(null);
   const [error, setError] = useState<string | null>(null);
+  useRestoreMainScroll("/history", items !== null || error !== null);
 
   useEffect(() => {
     let stop = false;
@@ -33,7 +35,16 @@ export function HistoryScreen() {
       {items && items.length > 0 && (
         <section className="card list-card">
           {items.map((item) => (
-            <button key={item.id} type="button" className="meal-row" onClick={() => go(`/workout/session/${item.id}`)}>
+            <button
+              key={item.id}
+              type="button"
+              className="meal-row"
+              data-scroll-anchor={item.id}
+              onClick={() => {
+                rememberMainScroll("/history", item.id);
+                go(`/workout/session/${item.id}`);
+              }}
+            >
               <span>
                 <span className="meal-name">{item.name}</span>
                 <small className="quiet">
@@ -57,6 +68,7 @@ export function ExerciseScreen({ exerciseId, from }: { exerciseId: string; from:
   const [data, setData] = useState<ExerciseHistoryDTO | null>(null);
   const [error, setError] = useState<string | null>(null);
   const back = from && from.startsWith("/") ? from : "/history";
+  useRestoreMainScroll(`/exercise/${exerciseId}`, Boolean(data));
 
   useEffect(() => {
     let stop = false;
@@ -106,7 +118,16 @@ export function ExerciseScreen({ exerciseId, from }: { exerciseId: string; from:
               const top = session.sets[0];
               const pr = session.sets.some((set) => set.isPr);
               return (
-                <button key={session.sessionId} type="button" className="meal-row" onClick={() => go(`/workout/session/${session.sessionId}`)}>
+                <button
+                  key={session.sessionId}
+                  type="button"
+                  className="meal-row"
+                  data-scroll-anchor={session.sessionId}
+                  onClick={() => {
+                    rememberMainScroll(`/exercise/${exerciseId}`, session.sessionId);
+                    go(`/workout/session/${session.sessionId}`);
+                  }}
+                >
                   <span>
                     <span className="meal-name">{top?.label ?? session.workoutName}</span>
                     <small className="quiet">{session.dateLabel}</small>

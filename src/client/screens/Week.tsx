@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { api, messageOf } from "../api";
 import type { SessionDTO, WeekDTO } from "../../shared/types";
+import { rememberMainScroll, useRestoreMainScroll } from "../scroll";
 import { Back, Banner, useNav } from "../ui";
 
 export function WeekScreen({ dayId }: { dayId?: string }) {
@@ -8,6 +9,8 @@ export function WeekScreen({ dayId }: { dayId?: string }) {
   const [week, setWeek] = useState<WeekDTO | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const here = dayId ? `/workout/day/${dayId}` : "/workout";
+  useRestoreMainScroll(here, Boolean(week));
 
   useEffect(() => {
     let stop = false;
@@ -24,6 +27,7 @@ export function WeekScreen({ dayId }: { dayId?: string }) {
   }, []);
 
   async function start(id: string) {
+    rememberMainScroll(here, id);
     setBusy(true);
     setError(null);
     try {
@@ -110,7 +114,11 @@ export function WeekScreen({ dayId }: { dayId?: string }) {
               key={item.id}
               type="button"
               className={item.suggested ? "day-row next" : item.status === "done" ? "day-row done" : "day-row"}
-              onClick={() => go(`/workout/day/${item.id}`)}
+              data-scroll-anchor={item.id}
+              onClick={() => {
+                rememberMainScroll("/workout", item.id);
+                go(`/workout/day/${item.id}`);
+              }}
             >
               <span>
                 <strong>{item.name}</strong>
@@ -127,9 +135,16 @@ export function WeekScreen({ dayId }: { dayId?: string }) {
           {startName}
         </button>
       )}
-      <div className="history-link">
+      <div className="history-link" data-scroll-anchor="history">
         <span className="quiet">Recent sessions and PRs</span>
-        <button type="button" className="pill" onClick={() => go("/history")}>
+        <button
+          type="button"
+          className="pill"
+          onClick={() => {
+            rememberMainScroll("/workout", "history");
+            go("/history");
+          }}
+        >
           History
         </button>
       </div>
