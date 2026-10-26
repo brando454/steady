@@ -333,6 +333,62 @@ body.logging .main {
 .meal-name { display: block; font-size: 13px; }
 .meal-side { text-align: right; white-space: nowrap; }
 .meal-open { border: 0; background: transparent; color: inherit; text-align: left; padding: 0; flex: 1; min-height: 44px; }
+.logged-meal { display: grid; gap: 4px; border-top: 1px solid var(--line); padding: 10px 0 4px; }
+.logged-meal .meal-row { border-top: 0; padding-top: 0; min-height: 0; }
+.mg { display: grid; gap: 8px; }
+.mg-line { margin: 0; font-size: 13px; }
+button.mg-toggle {
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font-weight: 400;
+  font-size: 13px;
+  line-height: 18px;
+  text-align: left;
+  padding: 0;
+  min-height: 32px;
+}
+.mg-spark { width: 100%; height: 44px; display: block; }
+.mg-trace { fill: none; stroke: var(--text); stroke-width: 1.6; stroke-linejoin: round; stroke-linecap: round; }
+.mg-meal { stroke: var(--accent); stroke-width: 1; stroke-dasharray: 2 3; opacity: 0.7; }
+.mg-dot { fill: var(--text); }
+.mg-stats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; align-items: start; }
+.mg-stat { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.mg-stat .k { font-size: 11px; font-weight: 400; color: var(--muted); }
+.mg-stat .v { font-size: 15px; font-weight: 400; font-variant-numeric: tabular-nums; }
+.mg-stat .glucose-pill { align-self: flex-start; min-height: 26px; padding: 2px 8px; font-size: 15px; font-weight: 500; }
+.day-glucose h2 { margin-bottom: 4px; }
+.day-plot { position: relative; height: 112px; }
+.day-plot svg { width: 100%; height: 112px; display: block; }
+.day-line { fill: none; stroke: var(--text); stroke-width: 1.6; stroke-linejoin: round; stroke-linecap: round; opacity: 0.85; }
+.day-dot { fill: var(--text); }
+.day-mark {
+  position: absolute;
+  width: 28px;
+  height: 28px;
+  margin: -14px 0 0 -14px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  padding: 0;
+  min-height: 0;
+}
+.day-mark::after {
+  content: "";
+  position: absolute;
+  left: 8px;
+  top: 8px;
+  width: 10px;
+  height: 10px;
+  border: 2px solid var(--card);
+  border-radius: 999px;
+  background: var(--accent);
+}
+.day-mark.workout::after { background: var(--muted); border-radius: 2px; width: 8px; height: 8px; left: 9px; top: 9px; }
+.day-mark[aria-pressed="true"]::after { outline: 2px solid var(--accent); outline-offset: 2px; }
+.day-caption { display: grid; gap: 2px; padding-top: 8px; }
+.day-caption .meal-name { font-size: 14px; font-weight: 400; }
+.day-caption .quiet { font-size: 13px; }
 .day-list { gap: 6px; }
 .day-row {
   display: flex;

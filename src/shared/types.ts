@@ -1,4 +1,5 @@
 import type { Macros, Ramp } from "./logic";
+import type { DayGlucose, MealGlucose } from "./mealGlucose";
 import type { WorkoutGlucose } from "./workoutGlucose";
 
 export type MealDTO = {
@@ -13,6 +14,8 @@ export type MealDTO = {
   loggedAt: string;
   timeLabel: string;
   date: string;
+  /** Sensor glucose around this meal. Null when Nightscout is not configured. */
+  glucose?: MealGlucose | null;
 };
 
 export type FavoriteDTO = {
@@ -140,6 +143,8 @@ export type TodayDTO = {
   totals: Macros;
   left: Macros;
   meals: MealDTO[];
+  /** Midnight-to-now sensor glucose for today. Null when Nightscout is not configured. */
+  glucoseDay: DayGlucose | null;
   suggestion: null | {
     dayId: string;
     name: string;

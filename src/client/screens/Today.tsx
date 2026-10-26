@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { api, formatInt, formatQty, messageOf } from "../api";
 import type { SessionDTO, TodayDTO } from "../../shared/types";
 import { shouldCelebrate } from "../../shared/logic";
+import { DayGlucoseChart } from "../DayGlucose";
 import { WorkoutGlucoseView } from "../WorkoutGlucose";
 import { Banner, Macro, Ring, useNav } from "../ui";
 
@@ -26,7 +27,8 @@ export function TodayScreen() {
   }, []);
 
   useEffect(() => {
-    if (!today?.suggestion?.glucose?.inProgress) return;
+    const live = Boolean(today?.glucoseDay) || Boolean(today?.suggestion?.glucose?.inProgress);
+    if (!live) return;
     let stop = false;
     const load = () => {
       api<TodayDTO>("/api/today")
@@ -45,7 +47,7 @@ export function TodayScreen() {
       window.clearInterval(id);
       document.removeEventListener("visibilitychange", onVisible);
     };
-  }, [today?.suggestion?.sessionId, today?.suggestion?.glucose?.inProgress]);
+  }, [today?.suggestion?.sessionId, today?.suggestion?.glucose?.inProgress, today?.glucoseDay]);
 
   async function start(dayId: string) {
     setBusy(true);
@@ -98,6 +100,8 @@ export function TodayScreen() {
           <Macro name="Fat" value={today.totals.fat} target={today.targets.fat} unit="g" />
         </div>
       </section>
+
+      {today.glucoseDay && <DayGlucoseChart day={today.glucoseDay} />}
 
       {suggestion?.completedToday ? (
         <CompletedToday suggestion={suggestion} onView={() => suggestion.sessionId && go(`/workout/session/${suggestion.sessionId}`)} />
