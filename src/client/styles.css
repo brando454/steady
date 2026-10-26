@@ -676,6 +676,54 @@ textarea { min-height: 88px; resize: vertical; }
 .pr.fresh { animation: rise 280ms ease; }
 @keyframes rise { from { transform: translateY(4px); opacity: 0; } to { transform: none; opacity: 1; } }
 
+.done-head { display: flex; align-items: center; gap: 12px; }
+.day-check {
+  position: relative;
+  width: 36px;
+  height: 36px;
+  flex: none;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--ok);
+  display: grid;
+  place-items: center;
+}
+.day-check svg { width: 18px; height: 18px; }
+.day-check .spark {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 5px;
+  height: 5px;
+  margin: -2.5px 0 0 -2.5px;
+  border-radius: 99px;
+  opacity: 0;
+  background: var(--accent);
+}
+.celebrate .day-check { animation: check-pop 420ms ease; }
+.celebrate .spark { animation: spark 700ms ease forwards; }
+.spark.s1 { --dx: -16px; --dy: -14px; background: var(--accent); }
+.spark.s2 { --dx: 14px; --dy: -16px; background: var(--ok); }
+.spark.s3 { --dx: 18px; --dy: 4px; background: var(--accent); }
+.spark.s4 { --dx: -18px; --dy: 6px; background: var(--warn); }
+.spark.s5 { --dx: 6px; --dy: 16px; background: var(--ok); }
+.spark.s6 { --dx: -6px; --dy: -18px; background: var(--accent); }
+@keyframes check-pop {
+  0% { transform: scale(0.7); }
+  55% { transform: scale(1.06); }
+  100% { transform: none; }
+}
+@keyframes spark {
+  0% { opacity: 0; transform: scale(0.4); }
+  25% { opacity: 1; }
+  100% { opacity: 0; transform: translate(var(--dx), var(--dy)) scale(1); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .celebrate .day-check,
+  .celebrate .spark { animation: none; }
+  .day-check .spark { display: none; }
+}
+
 .log-dock {
   position: fixed;
   left: 50%;

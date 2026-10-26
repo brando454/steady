@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { api, formatInt, formatQty, messageOf } from "../api";
 import type { SessionDTO, TodayDTO } from "../../shared/types";
+import { shouldCelebrate } from "../../shared/logic";
 import { Banner, Macro, Ring, useNav } from "../ui";
 
 export function TodayScreen() {
@@ -49,8 +50,7 @@ export function TodayScreen() {
 
   const over = today.left.calories < 0;
   const suggestion = today.suggestion;
-  const startLabel =
-    suggestion?.status === "in_progress" ? "Resume workout" : suggestion?.status === "done" ? "Start again" : "Start workout";
+  const startLabel = suggestion?.status === "in_progress" ? "Resume workout" : "Start workout";
 
   return (
     <>
@@ -76,7 +76,9 @@ export function TodayScreen() {
         </div>
       </section>
 
-      {suggestion ? (
+      {suggestion?.completedToday ? (
+        <CompletedToday suggestion={suggestion} onView={() => suggestion.sessionId && go(`/workout/session/${suggestion.sessionId}`)} />
+      ) : suggestion ? (
         <section className="card">
           <h2>{suggestion.name}</h2>
           {suggestion.rampNote && <p className="quiet">{suggestion.rampNote}</p>}
@@ -110,5 +112,64 @@ export function TodayScreen() {
         ))}
       </section>
     </>
+  );
+}
+
+function CompletedToday({
+  suggestion,
+  onView,
+}: {
+  suggestion: NonNullable<TodayDTO["suggestion"]>;
+  onView: () => void;
+}) {
+  const seenKey = suggestion.sessionId ? `steady-day-done:${suggestion.sessionId}` : "";
+  const [celebrate, setCelebrate] = useState(false);
+
+  useEffect(() => {
+    if (!seenKey) return;
+    let seen = false;
+    try {
+      seen = localStorage.getItem(seenKey) === "1";
+    } catch {
+      seen = true;
+    }
+    const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    if (!seen) {
+      try {
+        localStorage.setItem(seenKey, "1");
+      } catch {
+        /* private mode can refuse storage; the burst still plays this once */
+      }
+    }
+    setCelebrate(shouldCelebrate(seen, reduce));
+  }, [seenKey]);
+
+  return (
+    <section className={celebrate ? "card celebrate" : "card"}>
+      <div className="done-head">
+        <span className="day-check" aria-hidden="true">
+          <i className="spark s1" />
+          <i className="spark s2" />
+          <i className="spark s3" />
+          <i className="spark s4" />
+          <i className="spark s5" />
+          <i className="spark s6" />
+          <svg viewBox="0 0 24 24">
+            <path d="M5 12.5 9.2 17 19 7" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+        </span>
+        <div>
+          <p className="kicker">Day done</p>
+          <h2>{suggestion.name}</h2>
+        </div>
+      </div>
+      {suggestion.resultLine && <p className="quiet">{suggestion.resultLine}</p>}
+      {suggestion.summary && <p className="quiet">{suggestion.summary}</p>}
+      {suggestion.sessionId && (
+        <button type="button" className="secondary" onClick={onView}>
+          View workout
+        </button>
+      )}
+    </section>
   );
 }

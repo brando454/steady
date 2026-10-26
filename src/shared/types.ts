@@ -116,6 +116,10 @@ export type TodayDTO = {
     rampNote: string | null;
     summary: string;
     lines: string[];
+    completedToday: boolean;
+    prCount: number;
+    setCount: number;
+    resultLine: string;
   };
   weekDone: number;
   weekTotal: number;
