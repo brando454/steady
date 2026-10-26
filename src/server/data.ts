@@ -48,6 +48,7 @@ import type {
   SettingsDTO,
   TodayDTO,
   WidgetTodayDTO,
+  ProgramDTO,
   WeekDTO,
   WeightDTO,
 } from "../shared/types";
@@ -299,6 +300,75 @@ export async function getWeek(): Promise<WeekDTO> {
     total: dto.length,
     rampNote: rampForDate(settings.ramp, today)?.note ?? null,
     days: dto,
+  };
+}
+
+export async function getProgram(): Promise<ProgramDTO> {
+  const days = await rows<DayRow>(pool, "SELECT id, name, summary, sort_order FROM program_days ORDER BY sort_order");
+  const slots = await rows<SlotRow>(
+    pool,
+    `SELECT pe.*, e.name, e.pattern_key, e.pattern_label, e.muscles
+     FROM program_exercises pe
+     JOIN exercises e ON e.id = pe.exercise_id
+     ORDER BY pe.day_id, pe.sort_order`,
+  );
+  const exerciseIds = [...new Set(slots.map((slot) => slot.exercise_id))];
+  const lastWeights = exerciseIds.length
+    ? await rows<{ exercise_id: string; weight_lb: number | null }>(
+        pool,
+        `SELECT DISTINCT ON (exercise_id) exercise_id, weight_lb
+         FROM sets
+         WHERE logged_at IS NOT NULL AND exercise_id = ANY($1::text[])
+         ORDER BY exercise_id, logged_at DESC`,
+        [exerciseIds],
+      )
+    : [];
+  const weightByExercise = new Map(lastWeights.map((row) => [row.exercise_id, num(row.weight_lb)]));
+  const subRows = exerciseIds.length
+    ? await rows<{ exercise_id: string; substitute_id: string; name: string }>(
+        pool,
+        `SELECT s.exercise_id, s.substitute_id, e.name
+         FROM exercise_substitutes s
+         JOIN exercises e ON e.id = s.substitute_id
+         WHERE s.exercise_id = ANY($1::text[])
+         ORDER BY s.sort_order`,
+        [exerciseIds],
+      )
+    : [];
+  const catalog = await rows<ExerciseInfo>(pool, "SELECT id, name, pattern_key, is_cardio FROM exercises");
+  const explicit = new Map<string, { id: string; name: string }[]>();
+  for (const row of subRows) {
+    const list = explicit.get(row.exercise_id) ?? [];
+    list.push({ id: row.substitute_id, name: row.name });
+    explicit.set(row.exercise_id, list);
+  }
+  return {
+    days: days.map((day) => ({
+      id: day.id,
+      name: day.name,
+      summary: day.summary,
+      sortOrder: day.sort_order,
+      exercises: slots
+        .filter((slot) => slot.day_id === day.id)
+        .map((slot) => ({
+          programExerciseId: slot.id,
+          exerciseId: slot.exercise_id,
+          name: slot.name,
+          patternLabel: slot.pattern_label,
+          muscles: slot.muscles,
+          sortOrder: slot.sort_order,
+          sets: slot.sets,
+          repsLabel: slot.reps_label,
+          repCount: slot.rep_count,
+          measure: slot.measure,
+          perSide: slot.per_side,
+          notes: slot.notes,
+          isCardio: slot.is_cardio,
+          cardioMin: slot.cardio_min,
+          swaps: swapsFor(slot.exercise_id, slot.pattern_key, explicit, catalog),
+          lastWeightLb: weightByExercise.get(slot.exercise_id) ?? null,
+        })),
+    })),
   };
 }
 

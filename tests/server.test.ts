@@ -13,7 +13,7 @@ import {
   scrubSecret,
 } from "../src/server/nightscout";
 import { connectionConfig } from "../src/server/pg-config";
-import { resetRateLimit, signSession, verifySession, rateLimit } from "../src/server/auth";
+import { bearerToken, resetRateLimit, signSession, verifySession, rateLimit } from "../src/server/auth";
 
 test("session cookie lasts until it expires and rejects tampering", () => {
   const now = Date.parse("2026-10-24T12:00:00.000Z");
@@ -24,6 +24,17 @@ test("session cookie lasts until it expires and rejects tampering", () => {
   const [body] = token.split(".");
   assert.equal(verifySession(`${body}.aaaa`, "correct horse", now), false);
   assert.equal(verifySession(token, "correct horse", now + 366 * 24 * 60 * 60 * 1000), false);
+});
+
+test("a bearer header carries the native session token", () => {
+  assert.equal(bearerToken("Bearer abc.def"), "abc.def");
+  assert.equal(bearerToken("bearer abc.def"), "abc.def");
+  assert.equal(bearerToken("Basic abc"), "");
+  assert.equal(bearerToken(undefined), "");
+  const source = readFileSync(new URL("../src/server/app.ts", import.meta.url), "utf8");
+  assert.match(source, /res\.json\(\{ ok: true, token \}\)/);
+  assert.match(source, /bearerToken\(req\.get\("authorization"\)\)/);
+  assert.match(source, /app\.get\("\/api\/program"/);
 });
 
 test("login attempts are limited", () => {

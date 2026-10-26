@@ -81,6 +81,35 @@ export type DayDTO = {
   exercises: { name: string; detail: string; isCardio: boolean }[];
 };
 
+export type ProgramExerciseDTO = {
+  programExerciseId: number;
+  exerciseId: string;
+  name: string;
+  patternLabel: string;
+  muscles: string;
+  sortOrder: number;
+  sets: number;
+  repsLabel: string;
+  repCount: number;
+  measure: string;
+  perSide: boolean;
+  notes: string | null;
+  isCardio: boolean;
+  cardioMin: number | null;
+  swaps: { id: string; name: string }[];
+  lastWeightLb: number | null;
+};
+
+export type ProgramDayDTO = {
+  id: string;
+  name: string;
+  summary: string;
+  sortOrder: number;
+  exercises: ProgramExerciseDTO[];
+};
+
+export type ProgramDTO = { days: ProgramDayDTO[] };
+
 export type WeekDTO = {
   weekStart: string;
   weekEnd: string;
