@@ -148,6 +148,8 @@ A finished workout also reads the sensor glucose from the start of the session t
 
 Photos that are kept are compressed JPEG thumbnails. Favorites do not store a photo. The coach API does not return photos.
 
+The iPhone Food tab does the same. Take a photo or choose one, preview it, and remove it if it is wrong. Estimate fills the editable meal from the photo and the note. The phone sends a 1024 pixel JPEG for that estimate and keeps a smaller one, at most 120,000 characters, or leaves the picture off the saved meal if it still will not fit. Offline, Estimate says to enter the meal by hand. Log meal still saves it on the phone, photo included, until it can upload.
+
 ## Program
 
 Days A through E live in `src/shared/program.ts`, with substitutes for the same muscles and movement pattern. On a workout you can swap an exercise for today or make the swap the new default. History stays with the exercise that was actually logged. Cardio is logged with minutes and an optional note.
