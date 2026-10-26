@@ -164,7 +164,7 @@ The passcode is checked once. A valid login sets an HttpOnly cookie (`steady_ses
 
 The native app is in `ios/`. It talks to the same Render service, keeps the passcode in the Keychain, and can log a workout while the gym has no signal. It does not write to Nightscout, Loop, or HealthKit. A finished workout shows the same glucose summary as the phone site once the server sends it: start, end, average, lowest during, and the lowest in the two hours after, plus a small sparkline. mg/dL only.
 
-The home-screen widget is small and medium. A tap opens Food (`steady://food`). The rest timer can show a Live Activity and plays a short sound when rest ends.
+The home-screen widget is small and medium. A tap opens Food (`steady://food`). The rest timer can show a Live Activity and plays one short ding when rest ends. With the app open, that ding is paired with one success haptic. On the lock screen, the notification plays the same ding and vibrates according to the phone's settings.
 
 ### One-time Apple and GitHub setup
 
