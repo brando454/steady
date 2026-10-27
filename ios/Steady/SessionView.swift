@@ -523,7 +523,8 @@ struct SwapSheet: View {
 private struct RoundMove: Identifiable {
   var exercise: SessionExercise
   var set: WorkoutSet
-  var id: String { set.id }
+  // `set` is also the setter keyword, so a one-line getter is parsed as a setter.
+  var id: String { get { set.id } }
 }
 
 private struct SessionBlock: Identifiable {
