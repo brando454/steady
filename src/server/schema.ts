@@ -131,6 +131,14 @@ CREATE INDEX IF NOT EXISTS sessions_week_idx ON sessions (week_start);
 CREATE INDEX IF NOT EXISTS session_exercises_session_idx ON session_exercises (session_id);
 
 ALTER TABLE sessions ADD COLUMN IF NOT EXISTS glucose_summary jsonb;
+ALTER TABLE meals ADD COLUMN IF NOT EXISTS glucose_summary jsonb;
+ALTER TABLE meals ADD COLUMN IF NOT EXISTS nightscout_id text;
+ALTER TABLE meals ADD COLUMN IF NOT EXISTS nightscout_pending boolean NOT NULL DEFAULT false;
+
+CREATE TABLE IF NOT EXISTS nightscout_deletes (
+  nightscout_id text PRIMARY KEY,
+  queued_at timestamptz NOT NULL DEFAULT now()
+);
 `;
 
 export async function migrate(): Promise<void> {

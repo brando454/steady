@@ -52,7 +52,8 @@ On a laptop or in development, the first boot also inserts sample workouts, meal
 | `COACH_API_TOKEN` | No | Bearer token for the coach read API. If unset, that route returns 503. |
 | `WIDGET_TOKEN` | No | Bearer token for the home-screen widget. Separate from the coach token. If unset, that route returns 401. |
 | `NIGHTSCOUT_URL` | No | Nightscout site. A trailing slash, `/api/v1`, or a pasted `?token=` query is ignored. If either Nightscout variable is missing, the glucose card is hidden and Settings says which one. |
-| `NIGHTSCOUT_TOKEN` | No | Read token sent as the `token` query parameter. |
+| `NIGHTSCOUT_TOKEN` | No | Read token sent as the `token` query parameter. Steady uses this only for GET requests. |
+| `NIGHTSCOUT_WRITE_TOKEN` | No | Optional access token for meal Notes. In Nightscout Admin Tools, create a subject with the `careportal` role and paste its access token here. Leave it unset to keep Nightscout read-only. |
 | `AI_API_KEY` | No | Key for meal estimates. If unset, meals are entered by hand. |
 | `AI_BASE_URL` | No | OpenAI-compatible API origin. Defaults to `https://api.openai.com/v1`. |
 | `AI_MODEL` | No | Vision-capable chat model. Defaults to `gpt-4o-mini`. |
@@ -65,7 +66,7 @@ On a laptop or in development, the first boot also inserts sample workouts, meal
 
 1. Push this repo to GitHub.
 2. In the Render dashboard, choose **New** → **Blueprint** and select the repo. Render reads `render.yaml`.
-3. When Render prompts for the secret env vars (`sync: false`), set `APP_PASSCODE` and, if you want them, `COACH_API_TOKEN`, `WIDGET_TOKEN`, `NIGHTSCOUT_URL`, `NIGHTSCOUT_TOKEN`, and `AI_API_KEY`.
+3. When Render prompts for the secret env vars (`sync: false`), set `APP_PASSCODE` and, if you want them, `COACH_API_TOKEN`, `WIDGET_TOKEN`, `NIGHTSCOUT_URL`, `NIGHTSCOUT_TOKEN`, `NIGHTSCOUT_WRITE_TOKEN`, and `AI_API_KEY`.
 4. Apply the Blueprint. The web service builds with `npm install --include=dev && npm run build` (devDependencies are required for the Vite build) and starts with `npm start`. Render's health check is `GET /health`.
 
 The web service and database are both in Oregon so they share a private network. `DATABASE_URL` is the internal connection string. The database allow list is empty, so it accepts connections from that private network only. To use `psql` from a laptop, add your IP on the database's Networking page.
@@ -95,7 +96,7 @@ The always-on web plan `0.5c-512mb` (legacy name `starter`) is **$7 per month** 
 
 `GET /api/coach/review?from=YYYY-MM-DD&to=YYYY-MM-DD`
 
-Send `Authorization: Bearer $COACH_API_TOKEN`. Dates are America/Boise civil dates, and the range can be at most 120 days. The JSON includes meals (no photos), daily totals against targets, workouts with sets, personal records, weigh-ins, and a glucose summary on each finished workout. Glucose values are mg/dL. An unfinished workout has `glucose: null`.
+Send `Authorization: Bearer $COACH_API_TOKEN`. Dates are America/Boise civil dates, and the range can be at most 120 days. The JSON includes meals (no photos) with a glucose summary on each meal, daily totals against targets, workouts with sets, personal records, weigh-ins, and a glucose summary on each finished workout. Glucose values are mg/dL. An unfinished workout has `glucose: null`. A meal has `glucose: null` when Nightscout is not configured.
 
 ```bash
 curl -sS \
@@ -138,9 +139,24 @@ If `NIGHTSCOUT_URL` and `NIGHTSCOUT_TOKEN` are set, the workout screen reads the
 GET {NIGHTSCOUT_URL}/api/v1/entries.json?token=...&count=1
 ```
 
-That request is a GET. Steady never writes to Nightscout or to Loop. If Nightscout is not configured or cannot be reached, the glucose card is hidden and Settings says why. A reading older than 15 minutes still shows, marked as older than 15 minutes. The card is a reading and a trend only. Under about 120 mg/dL, and only while cardio is still ahead, it adds one line: have a low snack handy. It does not suggest insulin doses. Carbs for a meal are shown so they can be typed into Loop by hand.
+That request is a GET. Sensor entries are never written back, and Steady never writes to Loop or HealthKit. If Nightscout is not configured or cannot be reached, the glucose card is hidden and Settings says why. A reading older than 15 minutes still shows, marked as older than 15 minutes. The card is a reading and a trend only. Under about 120 mg/dL, and only while cardio is still ahead, it adds one line: have a low snack handy. It does not suggest insulin doses. Carbs for a meal are shown so they can be typed into Loop by hand.
 
 A finished workout also reads the sensor glucose from the start of the session through two hours after it ends. That is another GET, for the entries in that window. The session screen and the Day done card show the value at the start, at the end, the average and lowest during the workout, and the lowest in the two hours after. The two-hour low uses the same amber and red as the live glucose pill: under 120, and over 180. A small sparkline covers the whole window, with the workout itself shaded, and breaks where readings are more than about 12 minutes apart. While those two hours are still open, the summary says it is in progress and fills in as readings arrive. Once the window closes, Steady stores the summary on the session so it remains if Nightscout later drops the old entries. A failed read is not stored. Missing readings stay blank.
+
+A logged meal gets the same kind of summary, on a three-hour window. The Food list keeps it on one line until you tap it: the reading at the meal, the peak and how many minutes later it was, the rise, and the lowest reading in those three hours. The sparkline starts 30 minutes before the meal and runs to three hours after, with a mark at the meal time. While those three hours are still open it says in progress. Once they close, Steady stores the summary on the meal. Today also draws sensor glucose from midnight to now, with a small mark for each meal and workout. Tapping a meal mark shows its name and macros.
+
+If `NIGHTSCOUT_WRITE_TOKEN` is set, logging a meal also posts one Nightscout treatment. The server does that. The phone never calls Nightscout. The treatment is only a Note:
+
+```json
+{
+  "eventType": "Note",
+  "created_at": "2026-10-26T18:30:00.000Z",
+  "enteredBy": "Steady",
+  "notes": "Chicken bowl · 22C 10P 15F · 450 cal"
+}
+```
+
+`created_at` is the meal time. The macros are rounded and live only inside `notes` (`C` carbs, `P` protein, `F` fat, `cal` calories). The body never includes `carbs`, `protein`, `fat`, `insulin`, `absorptionTime`, or any other dosing field, so it does not change Nightscout COB or IOB and it does not reach Loop. Editing the meal updates that note. Deleting the meal deletes it. The returned `_id` is stored on the meal. If the token is missing or Nightscout does not answer, the meal still saves, and Steady tries the note again later. An offline iPhone keeps the meal in its upload queue; the note is posted when that upload reaches the server. Create the token in Nightscout under Admin Tools → Subjects, with the `careportal` role, and put the subject's access token in `NIGHTSCOUT_WRITE_TOKEN`. The read token stays `NIGHTSCOUT_TOKEN`.
 
 ## Meal estimates
 
@@ -164,7 +180,7 @@ The passcode is checked once. A valid login sets an HttpOnly cookie (`steady_ses
 
 ## iPhone
 
-The native app is in `ios/`. It talks to the same Render service, keeps the passcode in the Keychain, and can log a workout while the gym has no signal. It does not write to Nightscout, Loop, or HealthKit. A finished workout shows the same glucose summary as the phone site once the server sends it: start, end, average, lowest during, and the lowest in the two hours after, plus a small sparkline. mg/dL only.
+The native app is in `ios/`. It talks to the same Render service, keeps the passcode in the Keychain, and can log a workout while the gym has no signal. The phone does not write to Nightscout, Loop, or HealthKit. Meal Notes, when `NIGHTSCOUT_WRITE_TOKEN` is set, are posted by the server after the phone uploads the meal. A finished workout shows the same glucose summary as the phone site once the server sends it: start, end, average, lowest during, and the lowest in the two hours after, plus a small sparkline. A logged meal shows the three-hour meal summary, and Today shows the day graph. mg/dL only.
 
 The home-screen widget is small and medium. A tap opens Food (`steady://food`). The rest timer can show a Live Activity and plays one short ding when rest ends. With the app open, that ding is paired with one success haptic. On the lock screen, the notification plays the same ding and vibrates according to the phone's settings.
 

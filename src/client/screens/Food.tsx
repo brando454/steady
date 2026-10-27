@@ -5,6 +5,7 @@ import { mealEntryIsBlank, usualActionLabel } from "../../shared/logic";
 import { civilDate, timeValue } from "../../shared/time";
 import type { FavoriteDTO, FoodDayDTO } from "../../shared/types";
 import { alignToTopOfMain, beginMainScrollHold, reassertMainScroll } from "../scroll";
+import { MealGlucoseCard } from "../MealGlucose";
 import { Banner, Confirm, useNav, useToast } from "../ui";
 
 type FormState = {
@@ -107,6 +108,23 @@ export function FoodScreen({ search }: { search: URLSearchParams }) {
     const node = estimateRef.current;
     if (node) alignToTopOfMain(node, 12);
   }, [bringEstimate]);
+
+  useEffect(() => {
+    if (!food?.meals.some((meal) => meal.glucose?.inProgress)) return;
+    let stop = false;
+    const id = window.setInterval(() => {
+      const query = date ? `?date=${encodeURIComponent(date)}` : "";
+      api<FoodDayDTO>(`/api/meals${query}`)
+        .then((data) => {
+          if (!stop) setFood(data);
+        })
+        .catch(() => undefined);
+    }, 60_000);
+    return () => {
+      stop = true;
+      window.clearInterval(id);
+    };
+  }, [date, food]);
 
   function patch(partial: Partial<FormState>) {
     setForm((current) => ({ ...current, ...partial }));
@@ -537,17 +555,20 @@ export function FoodScreen({ search }: { search: URLSearchParams }) {
         <h2>Logged</h2>
         {food && food.meals.length === 0 && <p className="quiet">Nothing logged for this day.</p>}
         {food?.meals.map((meal) => (
-          <div key={meal.id} className="meal-row">
-            <button type="button" className="meal-open" onClick={() => go(`/food?edit=${meal.id}&date=${meal.date}`)}>
-              <span className="meal-name">{meal.name}</span>
-              <small className="quiet">
-                {meal.timeLabel} · {formatInt(meal.calories)} kcal, {formatQty(meal.protein)} g protein
-              </small>
-            </button>
-            {meal.photo && <img className="thumb" src={meal.photo} alt="" />}
-            <button type="button" className="linkish" onClick={() => setRemoveId(meal.id)}>
-              Delete
-            </button>
+          <div key={meal.id} className="logged-meal">
+            <div className="meal-row">
+              <button type="button" className="meal-open" onClick={() => go(`/food?edit=${meal.id}&date=${meal.date}`)}>
+                <span className="meal-name">{meal.name}</span>
+                <small className="quiet">
+                  {meal.timeLabel} · {formatInt(meal.calories)} kcal, {formatQty(meal.protein)} g protein
+                </small>
+              </button>
+              {meal.photo && <img className="thumb" src={meal.photo} alt="" />}
+              <button type="button" className="linkish" onClick={() => setRemoveId(meal.id)}>
+                Delete
+              </button>
+            </div>
+            {meal.glucose && <MealGlucoseCard summary={meal.glucose} />}
           </div>
         ))}
       </section>

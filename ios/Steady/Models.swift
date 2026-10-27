@@ -141,6 +141,7 @@ struct Meal: Codable, Identifiable, Hashable {
   var loggedAt: String
   var timeLabel: String
   var date: String
+  var glucose: MealGlucose?
 }
 
 struct Favorite: Codable, Identifiable, Hashable {
@@ -223,6 +224,46 @@ struct WorkoutGlucose: Codable, Hashable {
   var points: [WorkoutGlucosePoint]
 }
 
+struct MealGlucosePoint: Codable, Hashable {
+  var minute: Double
+  var mgdl: Int
+}
+
+struct MealGlucose: Codable, Hashable {
+  var inProgress: Bool
+  var unavailable: Bool
+  var atMgdl: Int?
+  var peakMgdl: Int?
+  var peakMinute: Int?
+  var riseMgdl: Int?
+  var lowAfterMgdl: Int?
+  var points: [MealGlucosePoint]
+}
+
+struct DayGlucosePoint: Codable, Hashable {
+  var minute: Double
+  var mgdl: Int
+}
+
+struct DayMarker: Codable, Hashable, Identifiable {
+  var id: String
+  var kind: String
+  var name: String
+  var minute: Double
+  var mgdl: Int?
+  var calories: Double?
+  var protein: Double?
+  var carbs: Double?
+  var fat: Double?
+}
+
+struct DayGlucose: Codable, Hashable {
+  var unavailable: Bool
+  var spanMinutes: Double
+  var points: [DayGlucosePoint]
+  var markers: [DayMarker]
+}
+
 struct Today: Codable {
   var date: String
   var dateLabel: String
@@ -231,6 +272,7 @@ struct Today: Codable {
   var totals: Macros
   var left: Macros
   var meals: [Meal]
+  var glucoseDay: DayGlucose?
   var suggestion: TodaySuggestion?
   var weekDone: Int
   var weekTotal: Int

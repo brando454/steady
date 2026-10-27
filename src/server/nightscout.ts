@@ -56,14 +56,14 @@ export function nightscoutEntriesUrl(base: string, token: string): URL {
   return url;
 }
 
-/** Historical SGV query. GET only; Steady never writes these entries back. */
-export function nightscoutRangeUrl(base: string, token: string, fromMs: number, toMs: number): URL {
+/** Historical SGV query. GET only; these sensor entries are never written back. */
+export function nightscoutRangeUrl(base: string, token: string, fromMs: number, toMs: number, count = 1000): URL {
   const root = normalizeNightscoutBase(base);
   const url = new URL(`${root}/api/v1/entries.json`);
   url.searchParams.set("token", normalizeNightscoutToken(token));
   url.searchParams.set("find[date][$gte]", String(Math.floor(fromMs)));
   url.searchParams.set("find[date][$lte]", String(Math.ceil(toMs)));
-  url.searchParams.set("count", "1000");
+  url.searchParams.set("count", String(count));
   return url;
 }
 
@@ -95,12 +95,13 @@ export async function readGlucoseRange(
   fromMs: number,
   toMs: number,
   fetchImpl: typeof fetch = fetch,
+  count = 1000,
 ): Promise<GlucoseRangeResult> {
   const base = process.env.NIGHTSCOUT_URL ?? "";
   const token = process.env.NIGHTSCOUT_TOKEN ?? "";
   const missing = [base.trim() ? "" : "NIGHTSCOUT_URL", normalizeNightscoutToken(token) ? "" : "NIGHTSCOUT_TOKEN"].filter(Boolean);
   if (missing.length > 0) return { ok: false, reason: "not_configured", detail: missing.join(" and ") };
-  const url = nightscoutRangeUrl(base, token, fromMs, toMs);
+  const url = nightscoutRangeUrl(base, token, fromMs, toMs, count);
   try {
     const response = await fetchImpl(url, { method: "GET", signal: AbortSignal.timeout(8000) });
     if (!response.ok) return { ok: false, reason: `http_${response.status}` };
@@ -207,7 +208,8 @@ function remember(value: GlucoseDTO, now: number): GlucoseDTO {
 
 /**
  * Read the latest Nightscout SGV. This function only sends GET.
- * Steady never writes to Nightscout or Loop.
+ * Sensor entries are never written back. A meal Note, when enabled, is sent
+ * from nightscoutWrite.ts and never includes a dosing field.
  */
 export async function readGlucose(fetchImpl: typeof fetch = fetch, now = Date.now()): Promise<GlucoseDTO> {
   const base = process.env.NIGHTSCOUT_URL ?? "";

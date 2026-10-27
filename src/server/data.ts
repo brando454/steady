@@ -1,6 +1,8 @@
 import { randomUUID } from "crypto";
 import { aiConfigured } from "./ai";
 import { pool, rows, tx, type Queryable } from "./db";
+import { dayGlucose, glucoseForMeals } from "./mealGlucose";
+import { removeMealNote, retryNightscoutNotes, syncMealNote } from "./mealNotes";
 import { glucoseForSession, glucoseForSessions } from "./workoutGlucose";
 import { formatPerformance, prescriptionLine } from "../shared/format";
 import {
@@ -209,6 +211,7 @@ type MealRow = {
   note: string | null;
   photo: string | null;
   logged_at: Date;
+  glucose_summary?: unknown;
 };
 
 function mealDTO(row: MealRow, withPhoto = true): MealDTO {
@@ -228,15 +231,31 @@ function mealDTO(row: MealRow, withPhoto = true): MealDTO {
   };
 }
 
-async function mealsOn(date: string, withPhoto = true): Promise<MealDTO[]> {
-  const found = await rows<MealRow>(
+async function mealRowsOn(date: string): Promise<MealRow[]> {
+  return rows<MealRow>(
     pool,
     `SELECT * FROM meals
      WHERE (logged_at AT TIME ZONE 'America/Boise')::date = $1::date
      ORDER BY logged_at`,
     [date],
   );
+}
+
+async function mealsOn(date: string, withPhoto = true): Promise<MealDTO[]> {
+  const found = await mealRowsOn(date);
   return found.map((row) => mealDTO(row, withPhoto));
+}
+
+async function mealsWithGlucose(date: string, withPhoto = true): Promise<MealDTO[]> {
+  const found = await mealRowsOn(date);
+  const glucose = await glucoseForMeals(
+    found.map((row) => ({
+      id: row.id,
+      loggedAt: row.logged_at instanceof Date ? row.logged_at : new Date(row.logged_at),
+      stored: row.glucose_summary,
+    })),
+  );
+  return found.map((row) => ({ ...mealDTO(row, withPhoto), glucose: glucose.get(row.id) ?? null }));
 }
 
 type DayRow = { id: string; name: string; summary: string; sort_order: number };
@@ -388,7 +407,29 @@ export async function getToday(): Promise<TodayDTO> {
   const today = civilDate(now);
   const settings = await getSettings();
   const week = await getWeek();
-  const meals = await mealsOn(today);
+  await retryNightscoutNotes();
+  const meals = await mealsWithGlucose(today);
+  const workouts = await rows<{ id: string; name: string; started_at: Date }>(
+    pool,
+    `SELECT id, name, started_at FROM sessions
+     WHERE (started_at AT TIME ZONE 'America/Boise')::date = $1::date
+     ORDER BY started_at`,
+    [today],
+  );
+  const glucoseDay = await dayGlucose({
+    start: wallTimeToUtc(today, "00:00"),
+    now,
+    meals: meals.map((meal) => ({
+      id: meal.id,
+      name: meal.name,
+      loggedAt: new Date(meal.loggedAt),
+      calories: meal.calories,
+      protein: meal.protein,
+      carbs: meal.carbs,
+      fat: meal.fat,
+    })),
+    workouts: workouts.map((workout) => ({ id: workout.id, name: workout.name, startedAt: workout.started_at })),
+  });
   const totals = dailyTotals(meals);
   const targets = targetsOf(settings);
   const finishedToday = await rows<{ id: string; day_id: string }>(
@@ -452,6 +493,7 @@ export async function getToday(): Promise<TodayDTO> {
     totals,
     left: macrosLeft(totals, targets),
     meals,
+    glucoseDay,
     suggestion: selected && focus
       ? {
           dayId: selected.id,
@@ -1180,7 +1222,8 @@ function mealInput(body: Record<string, unknown>) {
 export async function foodDay(dateInput: unknown): Promise<FoodDayDTO> {
   const date = dateInput == null || dateInput === "" ? civilDate(new Date()) : readDate(dateInput);
   const now = new Date();
-  const meals = await mealsOn(date);
+  await retryNightscoutNotes();
+  const meals = await mealsWithGlucose(date);
   const favorites = await rows<{
     id: string;
     name: string;
@@ -1214,10 +1257,11 @@ export async function createMeal(body: Record<string, unknown>): Promise<MealDTO
   const id = randomUUID();
   const loggedAt = wallTimeToUtc(meal.date, meal.time);
   await pool.query(
-    `INSERT INTO meals (id, logged_at, name, calories, protein, carbs, fat, note, photo, sample)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,false)`,
+    `INSERT INTO meals (id, logged_at, name, calories, protein, carbs, fat, note, photo, sample, nightscout_pending)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,false,true)`,
     [id, loggedAt, meal.name, meal.calories, meal.protein, meal.carbs, meal.fat, meal.note, meal.photo],
   );
+  await syncMealNote(id);
   const saved = await rows<MealRow>(pool, "SELECT * FROM meals WHERE id = $1", [id]);
   return mealDTO(saved[0]);
 }
@@ -1227,18 +1271,23 @@ export async function updateMeal(id: string, body: Record<string, unknown>): Pro
   const loggedAt = wallTimeToUtc(meal.date, meal.time);
   const result = await pool.query(
     `UPDATE meals
-     SET logged_at = $1, name = $2, calories = $3, protein = $4, carbs = $5, fat = $6, note = $7, photo = $8
+     SET logged_at = $1, name = $2, calories = $3, protein = $4, carbs = $5, fat = $6, note = $7, photo = $8,
+         glucose_summary = CASE WHEN logged_at IS DISTINCT FROM $1 THEN NULL ELSE glucose_summary END,
+         nightscout_pending = true
      WHERE id = $9`,
     [loggedAt, meal.name, meal.calories, meal.protein, meal.carbs, meal.fat, meal.note, meal.photo, id],
   );
   if (result.rowCount === 0) throw new HttpError(404, "Meal not found");
+  await syncMealNote(id);
   const saved = await rows<MealRow>(pool, "SELECT * FROM meals WHERE id = $1", [id]);
   return mealDTO(saved[0]);
 }
 
 export async function deleteMeal(id: string): Promise<void> {
-  const result = await pool.query("DELETE FROM meals WHERE id = $1", [id]);
-  if (result.rowCount === 0) throw new HttpError(404, "Meal not found");
+  const existing = await rows<{ nightscout_id: string | null }>(pool, "SELECT nightscout_id FROM meals WHERE id = $1", [id]);
+  if (!existing[0]) throw new HttpError(404, "Meal not found");
+  await pool.query("DELETE FROM meals WHERE id = $1", [id]);
+  await removeMealNote(existing[0].nightscout_id);
 }
 
 export async function saveFavorite(body: Record<string, unknown>): Promise<FavoriteDTO> {
@@ -1278,8 +1327,8 @@ export async function logFavorite(id: string, body: Record<string, unknown>): Pr
   if (!favorite[0]) throw new HttpError(404, "Favorite not found");
   const mealId = randomUUID();
   await pool.query(
-    `INSERT INTO meals (id, logged_at, name, calories, protein, carbs, fat, note, sample)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,false)`,
+    `INSERT INTO meals (id, logged_at, name, calories, protein, carbs, fat, note, sample, nightscout_pending)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,false,true)`,
     [
       mealId,
       wallTimeToUtc(date, time),
@@ -1292,6 +1341,7 @@ export async function logFavorite(id: string, body: Record<string, unknown>): Pr
     ],
   );
   await pool.query("UPDATE favorites SET last_used_at = now() WHERE id = $1", [id]);
+  await syncMealNote(mealId);
   const saved = await rows<MealRow>(pool, "SELECT * FROM meals WHERE id = $1", [mealId]);
   return mealDTO(saved[0]);
 }
@@ -1354,13 +1404,21 @@ export async function coachReview(from: string, to: string) {
   const dates = eachDate(from, to);
   if (dates.length > 120) throw new HttpError(400, "Date range is limited to 120 days");
   const settings = await getSettings();
+  await retryNightscoutNotes();
   const meals = await rows<MealRow>(
     pool,
-    `SELECT id, name, logged_at, calories, protein, carbs, fat, note, NULL::text AS photo
+    `SELECT id, name, logged_at, calories, protein, carbs, fat, note, NULL::text AS photo, glucose_summary
      FROM meals
      WHERE (logged_at AT TIME ZONE 'America/Boise')::date BETWEEN $1::date AND $2::date
      ORDER BY logged_at`,
     [from, to],
+  );
+  const glucoseByMeal = await glucoseForMeals(
+    meals.map((meal) => ({
+      id: meal.id,
+      loggedAt: meal.logged_at instanceof Date ? meal.logged_at : new Date(meal.logged_at),
+      stored: meal.glucose_summary,
+    })),
   );
   const weighIns = await rows<{ weighed_on: string; weight_lb: number }>(
     pool,
@@ -1444,7 +1502,10 @@ export async function coachReview(from: string, to: string) {
       const daySessions = sessions.filter((session) => civilDate(session.started_at) === date);
       return {
         date,
-        meals: dayMeals.map(({ photo: _photo, timeLabel: _time, date: _date, ...meal }) => meal),
+        meals: dayMeals.map(({ photo: _photo, timeLabel: _time, date: _date, ...meal }) => ({
+          ...meal,
+          glucose: glucoseByMeal.get(meal.id) ?? null,
+        })),
         totals: dailyTotals(dayMeals),
         weightLb: num(weighIns.find((row) => dateOnly(row.weighed_on) === date)?.weight_lb) ,
         workouts: daySessions.map((session) => ({

@@ -372,28 +372,7 @@ struct FoodView: View {
         Text("Nothing logged for this day.").font(.system(size: 13)).foregroundStyle(Theme.muted)
       }
       ForEach(food.meals) { meal in
-        HStack(alignment: .center, spacing: 8) {
-          Button {
-            fillLogged(meal)
-          } label: {
-            VStack(alignment: .leading, spacing: 2) {
-              Text(meal.name).font(.system(size: 15)).foregroundStyle(Theme.text)
-              Text("\(meal.timeLabel) · \(Format.grouped(meal.calories)) kcal, \(Format.qty(meal.protein)) g protein")
-                .font(.system(size: 12))
-                .foregroundStyle(Theme.muted)
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-          }
-          .buttonStyle(.plain)
-          if let photo = meal.photo, let image = MealPhoto.image(from: photo) {
-            Image(uiImage: image)
-              .resizable()
-              .scaledToFill()
-              .frame(width: 36, height: 36)
-              .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-          }
-          QuietButton(title: "Delete") { removeId = meal.id }
-        }
+        LoggedMealRow(meal: meal, onOpen: { fillLogged(meal) }, onDelete: { removeId = meal.id })
       }
       if editingId != nil {
         QuietButton(title: "Delete meal") { removeId = editingId }
@@ -634,6 +613,44 @@ struct FoodView: View {
     let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
     if trimmed.isEmpty { return nil }
     return Double(trimmed)
+  }
+
+  private struct LoggedMealRow: View {
+    var meal: Meal
+    var onOpen: () -> Void
+    var onDelete: () -> Void
+
+    var body: some View {
+      VStack(alignment: .leading, spacing: 6) {
+        HStack(alignment: .center, spacing: 8) {
+          Button(action: onOpen) {
+            VStack(alignment: .leading, spacing: 2) {
+              Text(meal.name).font(.system(size: 15)).foregroundStyle(Theme.text)
+              Text("\(meal.timeLabel) · \(Format.grouped(meal.calories)) kcal, \(Format.qty(meal.protein)) g protein")
+                .font(.system(size: 12))
+                .foregroundStyle(Theme.muted)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+          }
+          .buttonStyle(.plain)
+          if let photo = meal.photo, let image = MealPhoto.image(from: photo) {
+            Image(uiImage: image)
+              .resizable()
+              .scaledToFill()
+              .frame(width: 36, height: 36)
+              .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+          }
+          QuietButton(title: "Delete", action: onDelete)
+        }
+        if let glucose = meal.glucose {
+          MealGlucoseCard(summary: glucose)
+        }
+      }
+      .padding(.top, 8)
+      .overlay(alignment: .top) {
+        Rectangle().fill(Theme.line).frame(height: 1)
+      }
+    }
   }
 
   private func boiseClock(_ iso: String) -> String? {
