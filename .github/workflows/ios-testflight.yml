@@ -3,6 +3,7 @@ name: iOS TestFlight
 on:
   push:
     branches: [main]
+  pull_request:
   workflow_dispatch:
 
 jobs:
@@ -53,7 +54,7 @@ jobs:
           exit 1
 
       - name: Upload to TestFlight
-        if: steps.secrets.outputs.ready == 'true'
+        if: github.event_name != 'pull_request' && steps.secrets.outputs.ready == 'true'
         env:
           APP_STORE_CONNECT_KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
           APP_STORE_CONNECT_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}

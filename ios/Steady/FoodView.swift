@@ -39,6 +39,18 @@ struct FoodView: View {
   var body: some View {
     ScrollViewReader { proxy in
       ScreenStack {
+        if let food = model.food, let totals = food.totals, let targets = food.targets, let left = food.left {
+          Card {
+            HStack(alignment: .center, spacing: 16) {
+              CalorieRing(eaten: totals.calories, target: targets.calories, left: left.calories)
+              MacroBars(
+                protein: (totals.protein, targets.protein),
+                carbs: (totals.carbs, targets.carbs),
+                fat: (totals.fat, targets.fat)
+              )
+            }
+          }
+        }
         Text(editingId == nil ? "Log a meal" : "Edit meal")
           .font(.system(size: 20, weight: .semibold))
           .foregroundStyle(Theme.text)
@@ -51,6 +63,9 @@ struct FoodView: View {
           loopCard
           actions
           whenFields
+          if let day = food.glucoseDay {
+            DayGlucoseChart(day: day)
+          }
           logged(food)
         } else {
           Text("Loading food…").font(.system(size: 15)).foregroundStyle(Theme.muted)

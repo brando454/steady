@@ -272,7 +272,6 @@ struct Today: Codable {
   var totals: Macros
   var left: Macros
   var meals: [Meal]
-  var glucoseDay: DayGlucose?
   var suggestion: TodaySuggestion?
   var weekDone: Int
   var weekTotal: Int
@@ -293,6 +292,10 @@ struct FoodDay: Codable {
   var meals: [Meal]
   var favorites: [Favorite]
   var aiConfigured: Bool
+  var totals: Macros?
+  var targets: Macros?
+  var left: Macros?
+  var glucoseDay: DayGlucose?
 }
 
 struct MealEstimate: Codable {

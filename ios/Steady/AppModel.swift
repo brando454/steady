@@ -1137,10 +1137,10 @@ final class AppModel: ObservableObject {
         session = next
       }
     }
-    if today?.glucoseDay != nil || today?.suggestion?.glucose?.inProgress == true {
+    if today?.suggestion?.glucose?.inProgress == true {
       await refreshToday()
     }
-    if food?.meals.contains(where: { $0.glucose?.inProgress == true }) == true {
+    if food?.glucoseDay != nil || food?.meals.contains(where: { $0.glucose?.inProgress == true }) == true {
       await loadFood(date: food?.date)
     }
   }

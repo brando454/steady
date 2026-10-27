@@ -143,8 +143,6 @@ export type TodayDTO = {
   totals: Macros;
   left: Macros;
   meals: MealDTO[];
-  /** Midnight-to-now sensor glucose for today. Null when Nightscout is not configured. */
-  glucoseDay: DayGlucose | null;
   suggestion: null | {
     dayId: string;
     name: string;
@@ -183,6 +181,11 @@ export type FoodDayDTO = {
   meals: MealDTO[];
   favorites: FavoriteDTO[];
   aiConfigured: boolean;
+  totals: Macros;
+  targets: Macros;
+  left: Macros;
+  /** Sensor glucose for this civil day. Today runs through now. Null when Nightscout is not configured. */
+  glucoseDay: DayGlucose | null;
 };
 
 export type WeightPoint = { date: string; weightLb: number | null; average: number | null };
