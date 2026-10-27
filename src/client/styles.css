@@ -200,6 +200,7 @@ body.logging .main {
   font-size: 14px;
 }
 .primary { background: var(--accent); color: var(--on-accent); width: 100%; }
+.primary:active, .primary.pressed { opacity: 0.72; }
 .primary:disabled { opacity: 0.45; }
 .primary.danger { background: var(--danger); color: #fff; }
 @media (prefers-color-scheme: dark) {

@@ -21,20 +21,82 @@ struct PrimaryButton: View {
   var action: () -> Void
 
   var body: some View {
-    Button {
-      UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
-      action()
-    } label: {
+    Button(action: action) {
       Text(title)
         .font(.system(size: 14, weight: .semibold))
         .frame(maxWidth: .infinity)
         .frame(minHeight: 44)
+        .contentShape(Rectangle())
     }
-    .buttonStyle(.plain)
-    .foregroundStyle(Theme.onAccent)
-    .background(Theme.accent.opacity(enabled ? 1 : 0.45))
-    .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+    .buttonStyle(AccentButtonStyle())
     .disabled(!enabled)
+  }
+}
+
+/// The whole rounded rectangle is the hit target, including while it is pressed.
+private struct AccentButtonStyle: ButtonStyle {
+  @Environment(\.isEnabled) private var enabled
+
+  func makeBody(configuration: Configuration) -> some View {
+    configuration.label
+      .foregroundStyle(Theme.onAccent)
+      .frame(maxWidth: .infinity)
+      .frame(minHeight: 44)
+      .contentShape(Rectangle())
+      .background(Theme.accent.opacity(!enabled ? 0.45 : configuration.isPressed ? 0.72 : 1))
+      .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+  }
+}
+
+/// UIButton keeps the tap when a weight or rep field is focused. A SwiftUI button often spends that tap dismissing the keyboard.
+struct LogSetButton: UIViewRepresentable {
+  var title: String
+  var action: () -> Void
+
+  func makeUIView(context: Context) -> UIButton {
+    let button = UIButton(type: .custom)
+    button.configuration = context.coordinator.configuration(title)
+    button.configurationUpdateHandler = { button in
+      button.alpha = button.isHighlighted ? 0.72 : 1
+    }
+    button.addTarget(context.coordinator, action: #selector(Coordinator.tap), for: .touchUpInside)
+    button.setContentHuggingPriority(.defaultLow, for: .horizontal)
+    button.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+    return button
+  }
+
+  func updateUIView(_ button: UIButton, context: Context) {
+    context.coordinator.action = action
+    button.configuration = context.coordinator.configuration(title)
+  }
+
+  func sizeThatFits(_ proposal: ProposedViewSize, uiView: UIButton, context: Context) -> CGSize? {
+    CGSize(width: proposal.width ?? uiView.intrinsicContentSize.width, height: 44)
+  }
+
+  func makeCoordinator() -> Coordinator { Coordinator(action: action) }
+
+  final class Coordinator: NSObject {
+    var action: () -> Void
+    init(action: @escaping () -> Void) { self.action = action }
+
+    func configuration(_ title: String) -> UIButton.Configuration {
+      var config = UIButton.Configuration.filled()
+      config.title = title
+      config.baseBackgroundColor = Theme.accentUI
+      config.baseForegroundColor = Theme.onAccentUI
+      config.background.cornerRadius = 14
+      config.cornerStyle = .fixed
+      config.titleTextAttributesTransformer = UIConfigurationTextAttributesTransformer { incoming in
+        var outgoing = incoming
+        outgoing.font = .systemFont(ofSize: 14, weight: .semibold)
+        return outgoing
+      }
+      config.contentInsets = NSDirectionalEdgeInsets(top: 12, leading: 16, bottom: 12, trailing: 16)
+      return config
+    }
+
+    @objc func tap() { action() }
   }
 }
 

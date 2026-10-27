@@ -15,6 +15,8 @@ enum Theme {
   static let danger = adaptive(0x9D2C22, 0xFFB4AB)
   static let warn = adaptive(0x8A5600, 0xF0C27A)
   static let foot = adaptive(0x8A97A8, 0x7D8B9C)
+  static let accentUI = UIColor { traits in UIColor(hex: traits.userInterfaceStyle == .dark ? 0x8EB6FF : 0x1F5BD8) }
+  static let onAccentUI = UIColor { traits in UIColor(hex: traits.userInterfaceStyle == .dark ? 0x0E141B : 0xFFFFFF) }
 
   private static func adaptive(_ light: UInt, _ dark: UInt) -> Color {
     Color(uiColor: UIColor { traits in
@@ -109,6 +111,13 @@ enum Boise {
     var calendar = Calendar(identifier: .gregorian)
     calendar.timeZone = zone
     return calendar.component(.hour, from: date)
+  }
+
+  static func nextMidnight(after date: Date = Date()) -> Date {
+    var calendar = Calendar(identifier: .gregorian)
+    calendar.timeZone = zone
+    let start = calendar.startOfDay(for: date)
+    return calendar.date(byAdding: .day, value: 1, to: start) ?? date.addingTimeInterval(24 * 60 * 60)
   }
 
   static func timeValue(_ date: Date = Date()) -> String {

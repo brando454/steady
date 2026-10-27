@@ -2,7 +2,8 @@ import { useEffect, useRef, useState, type MutableRefObject } from "react";
 import { createPortal } from "react-dom";
 import { api, messageOf } from "../api";
 import type { GlucoseDTO, SessionDTO, SessionExerciseDTO, SetDTO } from "../../shared/types";
-import { alignToTopOfMain, reassertMainScroll, rememberMainScroll, restoreArmed, revealCurrentSet, shouldRevealCurrentSet, useRestoreMainScroll } from "../scroll";
+import { commitFocusedSetDraft } from "../../shared/logic";
+import { alignToTopOfMain, beginMainScrollHold, reassertMainScroll, rememberMainScroll, restoreArmed, revealCurrentSet, shouldRevealCurrentSet, useRestoreMainScroll } from "../scroll";
 import { WorkoutGlucoseView } from "../WorkoutGlucose";
 import { Back, Banner, Confirm, TrendArrow, useNav, useNow } from "../ui";
 
@@ -117,6 +118,8 @@ export function SessionScreen({ sessionId }: { sessionId: string }) {
   const [rest, setRest] = useState<Rest | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [logPressed, setLogPressed] = useState(false);
+  const logging = useRef(false);
   const [ask, setAsk] = useState<null | "finish" | "discard">(null);
   const patchTimer = useRef<number | null>(null);
   const revealedSession = useRef<string | null>(null);
@@ -260,9 +263,27 @@ export function SessionScreen({ sessionId }: { sessionId: string }) {
   }
 
   async function logCurrent() {
-    if (!session || !current) return;
-    const draft = drafts[current.set.id];
-    if (!draft) return;
+    if (logging.current || !session || !current) return;
+    const base = drafts[current.set.id];
+    if (!base) return;
+    const active = document.activeElement;
+    const draft = commitFocusedSetDraft(
+      base,
+      active instanceof HTMLInputElement
+        ? { label: active.getAttribute("aria-label") ?? "", value: active.value }
+        : null,
+    );
+    const ready = current.exercise.isCardio
+      ? Number(draft.minutes) > 0
+      : draft.weight !== "" && Number.isFinite(Number(draft.weight)) && Number(draft.reps) > 0;
+    if (!ready) {
+      setError(current.exercise.isCardio ? "Enter the minutes" : "Enter the weight and reps");
+      return;
+    }
+    logging.current = true;
+    beginMainScrollHold();
+    if (active instanceof HTMLElement) active.blur();
+    setDrafts((prev) => ({ ...prev, [current.set.id]: draft }));
     setBusy(true);
     setError(null);
     if (patchTimer.current) window.clearTimeout(patchTimer.current);
@@ -292,11 +313,14 @@ export function SessionScreen({ sessionId }: { sessionId: string }) {
         setRest({ ends: Date.now() + seconds * 1000 });
       }
       remember(next);
+      navigator.vibrate?.(12);
       reassertMainScroll();
     } catch (err) {
       setError(messageOf(err));
     } finally {
+      logging.current = false;
       setBusy(false);
+      setLogPressed(false);
       reassertMainScroll();
     }
   }
@@ -353,12 +377,6 @@ export function SessionScreen({ sessionId }: { sessionId: string }) {
   const mgdl = reading?.mgdl;
   const glucoseTone = mgdl == null ? "" : mgdl < 120 ? " low" : mgdl > 180 ? " high" : "";
   const snack = "Under 120 with cardio ahead, grab a quick snack";
-  const canLog = Boolean(
-    draft &&
-      (current?.exercise.isCardio
-        ? Number(draft.minutes) > 0
-        : draft.weight !== "" && Number.isFinite(Number(draft.weight)) && Number(draft.reps) > 0),
-  );
 
   useEffect(() => {
     const card = glucoseCard.current;
@@ -614,7 +632,18 @@ export function SessionScreen({ sessionId }: { sessionId: string }) {
             )}
           </div>
           {current && draft ? (
-            <button type="button" className="primary dock-log" disabled={!canLog || busy} onClick={() => void logCurrent()}>
+            <button
+              type="button"
+              className={logPressed ? "primary dock-log pressed" : "primary dock-log"}
+              disabled={busy}
+              onPointerDown={(event) => {
+                event.preventDefault();
+                setLogPressed(true);
+              }}
+              onPointerUp={() => void logCurrent()}
+              onPointerCancel={() => setLogPressed(false)}
+              onClick={() => void logCurrent()}
+            >
               {current.exercise.isCardio ? "Log cardio" : `Log set ${current.set.setIndex}`}
             </button>
           ) : (

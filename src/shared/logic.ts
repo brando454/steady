@@ -206,6 +206,29 @@ export function todayFocus(
   return { dayId: next, sessionId: null, completedToday: false };
 }
 
+export type SetEntryDraft = {
+  weight: string;
+  reps: string;
+  minutes: string;
+  note: string;
+};
+
+/**
+ * The number the person just typed lives on the focused field until it blurs.
+ * Logging must use that text, not the last saved draft.
+ */
+export function commitFocusedSetDraft(
+  draft: SetEntryDraft,
+  active: { label: string; value: string } | null,
+): SetEntryDraft {
+  if (!active) return draft;
+  const label = active.label.toLowerCase();
+  if (label.includes("rep") || label.includes("meter")) return { ...draft, reps: active.value };
+  if (label.includes("minute")) return { ...draft, minutes: active.value };
+  if (label.includes("weight")) return { ...draft, weight: active.value };
+  return draft;
+}
+
 export function dayDoneLine(sets: number, prs: number): string {
   const parts: string[] = [];
   if (sets === 1) parts.push("1 set");

@@ -16,6 +16,13 @@ struct SteadyApp: App {
       RootView()
         .environmentObject(model)
         .onOpenURL { model.open(url: $0) }
+        .onChange(of: scenePhase) { _, phase in
+          if phase == .active {
+            Task { await model.becameActive() }
+          }
+        }
     }
   }
+
+  @Environment(\.scenePhase) private var scenePhase
 }
