@@ -1,4 +1,5 @@
-import { pool } from "./db";
+import { pool, tx } from "./db";
+import { migrateSupersets } from "./supersetMigrate";
 
 export const SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS settings (
@@ -48,7 +49,9 @@ CREATE TABLE IF NOT EXISTS program_exercises (
   per_side boolean NOT NULL DEFAULT false,
   notes text,
   is_cardio boolean NOT NULL DEFAULT false,
-  cardio_min integer
+  cardio_min integer,
+  superset_group text,
+  superset_order integer
 );
 
 CREATE TABLE IF NOT EXISTS sessions (
@@ -76,7 +79,9 @@ CREATE TABLE IF NOT EXISTS session_exercises (
   per_side boolean NOT NULL DEFAULT false,
   notes text,
   is_cardio boolean NOT NULL DEFAULT false,
-  cardio_min integer
+  cardio_min integer,
+  superset_group text,
+  superset_order integer
 );
 
 CREATE TABLE IF NOT EXISTS sets (
@@ -90,7 +95,8 @@ CREATE TABLE IF NOT EXISTS sets (
   note text,
   is_pr boolean NOT NULL DEFAULT false,
   pr_kind text,
-  logged_at timestamptz
+  logged_at timestamptz,
+  migrated boolean NOT NULL DEFAULT false
 );
 
 CREATE TABLE IF NOT EXISTS meals (
@@ -134,6 +140,11 @@ ALTER TABLE sessions ADD COLUMN IF NOT EXISTS glucose_summary jsonb;
 ALTER TABLE meals ADD COLUMN IF NOT EXISTS glucose_summary jsonb;
 ALTER TABLE meals ADD COLUMN IF NOT EXISTS nightscout_id text;
 ALTER TABLE meals ADD COLUMN IF NOT EXISTS nightscout_pending boolean NOT NULL DEFAULT false;
+ALTER TABLE program_exercises ADD COLUMN IF NOT EXISTS superset_group text;
+ALTER TABLE program_exercises ADD COLUMN IF NOT EXISTS superset_order integer;
+ALTER TABLE session_exercises ADD COLUMN IF NOT EXISTS superset_group text;
+ALTER TABLE session_exercises ADD COLUMN IF NOT EXISTS superset_order integer;
+ALTER TABLE sets ADD COLUMN IF NOT EXISTS migrated boolean NOT NULL DEFAULT false;
 
 CREATE TABLE IF NOT EXISTS nightscout_deletes (
   nightscout_id text PRIMARY KEY,
@@ -143,4 +154,5 @@ CREATE TABLE IF NOT EXISTS nightscout_deletes (
 
 export async function migrate(): Promise<void> {
   await pool.query(SCHEMA_SQL);
+  await tx((client) => migrateSupersets(client));
 }

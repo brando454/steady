@@ -100,8 +100,9 @@ export async function seedIfEmpty(): Promise<void> {
         const slot = day.slots[slotIndex];
         await client.query(
           `INSERT INTO program_exercises (
-             day_id, exercise_id, sort_order, sets, reps_label, rep_count, measure, per_side, notes, is_cardio, cardio_min
-           ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
+             day_id, exercise_id, sort_order, sets, reps_label, rep_count, measure, per_side, notes, is_cardio, cardio_min,
+             superset_group, superset_order
+           ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
           [
             day.id,
             slot.exerciseId,
@@ -114,6 +115,8 @@ export async function seedIfEmpty(): Promise<void> {
             slot.notes ?? null,
             Boolean(slot.isCardio),
             slot.cardioMin ?? null,
+            slot.supersetGroup ?? null,
+            slot.supersetOrder ?? null,
           ],
         );
       }
@@ -177,10 +180,12 @@ export async function seedIfEmpty(): Promise<void> {
       cardio_min: number | null;
       sort_order: number;
       name: string;
+      superset_group: string | null;
+      superset_order: number | null;
     }>(
       client,
       `SELECT pe.id, pe.day_id, pe.exercise_id, pe.sets, pe.rep_count, pe.reps_label, pe.measure, pe.per_side,
-              pe.notes, pe.is_cardio, pe.cardio_min, pe.sort_order, e.name
+              pe.notes, pe.is_cardio, pe.cardio_min, pe.sort_order, pe.superset_group, pe.superset_order, e.name
        FROM program_exercises pe JOIN exercises e ON e.id = pe.exercise_id
        ORDER BY pe.sort_order`,
     );
@@ -204,8 +209,8 @@ export async function seedIfEmpty(): Promise<void> {
         await client.query(
           `INSERT INTO session_exercises (
              id, session_id, program_exercise_id, exercise_id, name, sort_order, sets, reps_label, rep_count,
-             measure, per_side, notes, is_cardio, cardio_min
-           ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
+             measure, per_side, notes, is_cardio, cardio_min, superset_group, superset_order
+           ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)`,
           [
             sxId,
             sessionId,
@@ -221,6 +226,8 @@ export async function seedIfEmpty(): Promise<void> {
             slot.notes,
             slot.is_cardio,
             slot.cardio_min,
+            slot.superset_group,
+            slot.superset_order,
           ],
         );
         for (let setIndex = 1; setIndex <= slot.sets; setIndex += 1) {

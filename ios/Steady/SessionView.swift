@@ -23,9 +23,13 @@ struct SessionView: View {
             glucoseCard(session)
           }
           BannerText(text: model.banner)
-          ForEach(session.exercises) { exercise in
-            exerciseCard(session, exercise)
-              .id(exercise.id)
+          ForEach(sessionBlocks(session.exercises)) { block in
+            switch block.kind {
+            case .single(let exercise):
+              exerciseCard(session, exercise).id(exercise.id)
+            case .superset(let title, let members):
+              supersetCard(session, title, members).id(members.first?.id ?? block.id)
+            }
           }
           if session.completedAt == nil {
             Button("Discard workout") { confirmDiscard = true }
@@ -98,6 +102,124 @@ struct SessionView: View {
     }
   }
 
+  private func supersetCard(_ session: WorkoutSession, _ title: String, _ members: [SessionExercise]) -> some View {
+    let indexes = Array(Set(members.flatMap { $0.sets.map(\.setIndex) })).sorted()
+    return Card {
+      Text(title).font(.system(size: 16, weight: .semibold)).foregroundStyle(Theme.text)
+      ForEach(members) { exercise in
+        VStack(alignment: .leading, spacing: 4) {
+          HStack(alignment: .top) {
+            Button {
+              model.remember(key: session.id, anchor: exercise.id)
+              model.workoutPath.append(WorkoutRoute.exercise(exercise.exerciseId))
+            } label: {
+              Text(exercise.name).font(.system(size: 15, weight: .semibold)).foregroundStyle(Theme.text)
+            }
+            .buttonStyle(.plain)
+            Spacer()
+            if session.completedAt == nil {
+              Button("Swap") {
+                model.remember(key: session.id, anchor: exercise.id)
+                swapExercise = exercise
+              }
+              .font(.system(size: 13, weight: .semibold))
+              .foregroundStyle(Theme.accent)
+            }
+          }
+          Text("Last time: \(exercise.lastTime). PR \(exercise.prLine)")
+            .font(.system(size: 12, weight: .regular))
+            .foregroundStyle(Theme.muted)
+        }
+        .id(exercise.id)
+      }
+      ForEach(indexes, id: \.self) { index in
+        let round = members.compactMap { exercise -> (SessionExercise, WorkoutSet)? in
+          guard let set = exercise.sets.first(where: { $0.setIndex == index }) else { return nil }
+          return (exercise, set)
+        }
+        let current = round.contains { model.currentSetId == $0.1.id && $0.1.loggedAt == nil }
+        VStack(alignment: .leading, spacing: 12) {
+          HStack(spacing: 8) {
+            Text(round.allSatisfy { $0.1.loggedAt != nil } ? "Set \(index) done" : "Set \(index)")
+              .font(.system(size: 13, weight: current ? .semibold : .regular))
+              .foregroundStyle(Theme.text)
+            if round.contains(where: { model.freshPr.contains($0.1.id) }) {
+              Text("New PR").font(.system(size: 11, weight: .semibold)).foregroundStyle(Theme.ok)
+            } else if round.contains(where: { $0.1.isPr }) {
+              Text("PR").font(.system(size: 11, weight: .semibold)).foregroundStyle(Theme.ok)
+            }
+          }
+          ForEach(round.map { RoundMove(exercise: $0.0, set: $0.1) }) { item in
+            VStack(alignment: .leading, spacing: 6) {
+              HStack(spacing: 6) {
+                Text(item.exercise.name).font(.system(size: 14, weight: .semibold)).foregroundStyle(Theme.text)
+                if item.set.migrated == true {
+                  Text("Migrated").font(.system(size: 11, weight: .regular)).foregroundStyle(Theme.muted)
+                }
+                if model.freshPr.contains(item.set.id) {
+                  Text("New PR").font(.system(size: 11, weight: .semibold)).foregroundStyle(Theme.ok)
+                } else if item.set.isPr {
+                  Text("PR").font(.system(size: 11, weight: .semibold)).foregroundStyle(Theme.ok)
+                }
+              }
+              movementSteppers(session, item.exercise, item.set)
+            }
+          }
+        }
+        .padding(10)
+        .background(current ? Theme.accentSoft : Theme.bg)
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+      }
+      if session.completedAt == nil, let first = members.first {
+        HStack {
+          Button("Remove set") { model.removeLastSet(exerciseId: first.id) }
+          Spacer()
+          Button("Add set") { model.addSet(exerciseId: first.id) }
+        }
+        .font(.system(size: 13, weight: .semibold))
+        .foregroundStyle(Theme.accent)
+      }
+    }
+  }
+
+  @ViewBuilder private func movementSteppers(_ session: WorkoutSession, _ exercise: SessionExercise, _ set: WorkoutSet) -> some View {
+    let locked = set.loggedAt != nil || session.completedAt != nil
+    HStack(spacing: 8) {
+      stepper(
+        label: "\(exercise.name) weight",
+        field: .weight(set.id),
+        text: Binding(
+          get: { model.drafts[set.id]?.weight ?? "" },
+          set: { value in
+            var draft = model.drafts[set.id] ?? SetDraft(set: set, exercise: exercise)
+            draft.weight = sanitize(value, decimal: true)
+            model.currentSetId = set.id
+            model.changeDraft(setId: set.id, draft)
+          }
+        ),
+        minus: { model.step(setId: set.id, weight: -1) },
+        plus: { model.step(setId: set.id, weight: 1) }
+      )
+      stepper(
+        label: exercise.measure == "meters" ? "\(exercise.name) meters" : "\(exercise.name) reps",
+        field: .reps(set.id),
+        text: Binding(
+          get: { model.drafts[set.id]?.reps ?? "" },
+          set: { value in
+            var draft = model.drafts[set.id] ?? SetDraft(set: set, exercise: exercise)
+            draft.reps = sanitize(value, decimal: false)
+            model.currentSetId = set.id
+            model.changeDraft(setId: set.id, draft)
+          }
+        ),
+        minus: { model.step(setId: set.id, reps: -1) },
+        plus: { model.step(setId: set.id, reps: 1) }
+      )
+    }
+    .disabled(locked)
+    .opacity(locked ? 0.72 : 1)
+  }
+
   private func exerciseCard(_ session: WorkoutSession, _ exercise: SessionExercise) -> some View {
     Card {
       HStack(alignment: .top) {
@@ -157,6 +279,9 @@ struct SessionView: View {
               Text("New PR").font(.system(size: 11, weight: .semibold)).foregroundStyle(Theme.ok)
             } else if set.isPr {
               Text("PR").font(.system(size: 11, weight: .semibold)).foregroundStyle(Theme.ok)
+            }
+            if set.migrated == true {
+              Text("Migrated").font(.system(size: 11, weight: .regular)).foregroundStyle(Theme.muted)
             }
           }
         }
@@ -393,4 +518,45 @@ struct SwapSheet: View {
       }
     }
   }
+}
+
+private struct RoundMove: Identifiable {
+  var exercise: SessionExercise
+  var set: WorkoutSet
+  // `set` is also the setter keyword, so a one-line getter is parsed as a setter.
+  var id: String { get { set.id } }
+}
+
+private struct SessionBlock: Identifiable {
+  enum Kind {
+    case single(SessionExercise)
+    case superset(title: String, members: [SessionExercise])
+  }
+
+  var id: String
+  var kind: Kind
+}
+
+private func sessionBlocks(_ exercises: [SessionExercise]) -> [SessionBlock] {
+  let ordered = exercises.sorted { lhs, rhs in
+    if lhs.sortOrder != rhs.sortOrder { return lhs.sortOrder < rhs.sortOrder }
+    return (lhs.supersetOrder ?? 0) < (rhs.supersetOrder ?? 0)
+  }
+  var used = Set<String>()
+  var blocks: [SessionBlock] = []
+  for exercise in ordered {
+    if used.contains(exercise.id) { continue }
+    guard let group = exercise.supersetGroup, !group.isEmpty else {
+      used.insert(exercise.id)
+      blocks.append(SessionBlock(id: exercise.id, kind: .single(exercise)))
+      continue
+    }
+    let members = ordered
+      .filter { $0.supersetGroup == group }
+      .sorted { ($0.supersetOrder ?? 0) < ($1.supersetOrder ?? 0) }
+    for member in members { used.insert(member.id) }
+    let title = "Superset · " + members.map(\.name).joined(separator: " + ")
+    blocks.append(SessionBlock(id: group, kind: .superset(title: title, members: members)))
+  }
+  return blocks
 }

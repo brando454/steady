@@ -16,6 +16,7 @@ struct WorkoutSet: Codable, Identifiable, Hashable {
   var prKind: String?
   var loggedAt: String?
   var label: String
+  var migrated: Bool? = nil
 }
 
 struct SessionExercise: Codable, Identifiable, Hashable {
@@ -36,6 +37,8 @@ struct SessionExercise: Codable, Identifiable, Hashable {
   var lastTime: String
   var lastWeightLb: Double?
   var prLine: String
+  var supersetGroup: String? = nil
+  var supersetOrder: Int? = nil
   var swaps: [NamedSwap]
   var sets: [WorkoutSet]
 }
@@ -78,6 +81,8 @@ struct ProgramExercise: Codable, Identifiable, Hashable {
   var notes: String?
   var isCardio: Bool
   var cardioMin: Double?
+  var supersetGroup: String? = nil
+  var supersetOrder: Int? = nil
   var swaps: [NamedSwap]
   var lastWeightLb: Double?
   var id: String { exerciseId + "-\(programExerciseId)" }
@@ -483,6 +488,12 @@ struct MealDraft: Codable, Equatable {
       "time": AnyEncodable(time),
     ]
   }
+}
+
+struct RoundSetBody: Encodable {
+  var id: String
+  var weightLb: Double
+  var reps: Double
 }
 
 struct AnyEncodable: Encodable {

@@ -5,6 +5,7 @@ import { dayGlucose, glucoseForMeals } from "./mealGlucose";
 import { removeMealNote, retryNightscoutNotes, syncMealNote } from "./mealNotes";
 import { glucoseForSession, glucoseForSessions } from "./workoutGlucose";
 import { formatPerformance, prescriptionLine } from "../shared/format";
+import { programPreview, type Groupable } from "../shared/superset";
 import {
   annotatePrs,
   averageChange,
@@ -93,7 +94,23 @@ type SlotRow = {
   pattern_key: string;
   pattern_label: string;
   muscles: string;
+  superset_group: string | null;
+  superset_order: number | null;
 };
+
+function slotPreview(slots: SlotRow[]): Groupable[] {
+  return slots.map((slot) => ({
+    id: slot.id,
+    name: slot.name,
+    sets: slot.sets,
+    repsLabel: slot.reps_label,
+    isCardio: slot.is_cardio,
+    notes: slot.notes,
+    supersetGroup: slot.superset_group,
+    supersetOrder: slot.superset_order,
+    sortOrder: slot.sort_order,
+  }));
+}
 
 function asRamp(value: Ramp | string): Ramp {
   return typeof value === "string" ? (JSON.parse(value) as Ramp) : value;
@@ -304,13 +321,7 @@ export async function getWeek(): Promise<WeekDTO> {
       suggested: day.id === suggested,
       doneWeekday: finished?.completed_at ? weekdayShort(civilDate(finished.completed_at)) : null,
       sessionId: active?.id ?? null,
-      exercises: slots
-        .filter((slot) => slot.day_id === day.id)
-        .map((slot) => ({
-          name: slot.name,
-          detail: slot.is_cardio ? slot.notes || slot.reps_label : `${slot.sets}×${slot.reps_label}`,
-          isCardio: slot.is_cardio,
-        })),
+      exercises: programPreview(slotPreview(slots.filter((slot) => slot.day_id === day.id))),
     };
   });
   return {
@@ -386,6 +397,8 @@ export async function getProgram(): Promise<ProgramDTO> {
           notes: slot.notes,
           isCardio: slot.is_cardio,
           cardioMin: slot.cardio_min,
+          supersetGroup: slot.superset_group,
+          supersetOrder: slot.superset_order,
           swaps: swapsFor(slot.exercise_id, slot.pattern_key, explicit, catalog),
           lastWeightLb: weightByExercise.get(slot.exercise_id) ?? null,
         })),
@@ -480,7 +493,9 @@ export async function getToday(): Promise<TodayDTO> {
           sessionId: focus.completedToday ? focus.sessionId : selected.sessionId,
           rampNote: focus.completedToday ? null : week.rampNote,
           summary: selected.summary,
-          lines: slots.map((slot) => prescriptionLine(slot.name, slot.sets, slot.reps_label, slot.is_cardio, slot.notes)),
+          lines: programPreview(slotPreview(slots)).map((line) =>
+            line.isCardio ? prescriptionLine(line.name, 1, line.detail, true, line.detail) : `${line.name} · ${line.detail}`,
+          ),
           completedToday: focus.completedToday,
           prCount,
           setCount,
@@ -507,6 +522,7 @@ type SetRow = {
   is_pr: boolean;
   pr_kind: string | null;
   logged_at: Date | null;
+  migrated?: boolean;
 };
 type SxRow = Omit<SlotRow, "id" | "day_id"> & {
   id: string;
@@ -591,11 +607,12 @@ export async function getSession(id: string): Promise<SessionDTO | null> {
     pool,
     `SELECT sx.id, sx.session_id, sx.program_exercise_id, sx.exercise_id, sx.name, sx.sort_order, sx.sets,
             sx.reps_label, sx.rep_count, sx.measure, sx.per_side, sx.notes, sx.is_cardio, sx.cardio_min,
+            sx.superset_group, sx.superset_order,
             e.pattern_key, e.pattern_label, e.muscles
      FROM session_exercises sx
      JOIN exercises e ON e.id = sx.exercise_id
      WHERE sx.session_id = $1
-     ORDER BY sx.sort_order, sx.name`,
+     ORDER BY sx.sort_order, sx.superset_order, sx.name`,
     [id],
   );
   const ids = exercises.map((exercise) => exercise.id);
@@ -651,6 +668,7 @@ export async function getSession(id: string): Promise<SessionDTO | null> {
         prKind: set.pr_kind === "weight" || set.pr_kind === "e1rm" ? set.pr_kind : null,
         loggedAt: stamp(set.logged_at),
         label: setLabel(set, exercise),
+        migrated: Boolean(set.migrated),
       }));
     return {
       id: exercise.id,
@@ -670,6 +688,8 @@ export async function getSession(id: string): Promise<SessionDTO | null> {
       lastTime: copy.lastTime,
       lastWeightLb: copy.lastWeightLb,
       prLine: copy.prLine,
+      supersetGroup: exercise.superset_group,
+      supersetOrder: exercise.superset_order,
       swaps: exercise.is_cardio ? [] : swapsFor(exercise.exercise_id, exercise.pattern_key, explicit, catalog),
       sets,
     };
@@ -742,8 +762,8 @@ export async function startSession(dayId: string): Promise<SessionDTO> {
       await client.query(
         `INSERT INTO session_exercises (
            id, session_id, program_exercise_id, exercise_id, name, sort_order, sets, reps_label, rep_count,
-           measure, per_side, notes, is_cardio, cardio_min
-         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
+           measure, per_side, notes, is_cardio, cardio_min, superset_group, superset_order
+         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)`,
         [
           sxId,
           sessionId,
@@ -759,6 +779,8 @@ export async function startSession(dayId: string): Promise<SessionDTO> {
           slot.notes,
           slot.is_cardio,
           slot.cardio_min,
+          slot.superset_group,
+          slot.superset_order,
         ],
       );
       const last = await rows<{ weight_lb: number | null }>(
@@ -857,6 +879,162 @@ export async function logSet(setId: string, body: Record<string, unknown>): Prom
       await recomputePrs(client, set.exercise_id);
     }
     return set.session_id;
+  });
+  return requireSession(sessionId);
+}
+
+export async function logRound(sessionId: string, body: Record<string, unknown>): Promise<SessionDTO> {
+  const raw = Array.isArray(body.sets) ? body.sets : [];
+  if (raw.length < 1) throw new HttpError(400, "Nothing to log");
+  const saved = await tx(async (client) => {
+    const exerciseIds = new Set<string>();
+    let setIndex: number | null = null;
+    let group: string | null | undefined;
+    for (const item of raw) {
+      if (!item || typeof item !== "object") throw new HttpError(400, "Nothing to log");
+      const record = item as Record<string, unknown>;
+      const setId = cleanText(record.id, "Set", 80);
+      const set = await openSet(client, setId);
+      if (set.session_id !== sessionId) throw new HttpError(404, "Set not found");
+      if (set.logged_at) throw new HttpError(409, "That set is already logged");
+      const meta = await rows<{ superset_group: string | null; set_index: number }>(
+        client,
+        `SELECT sx.superset_group, s.set_index
+         FROM sets s JOIN session_exercises sx ON sx.id = s.session_exercise_id
+         WHERE s.id = $1`,
+        [setId],
+      );
+      const info = meta[0];
+      if (!info) throw new HttpError(404, "Set not found");
+      if (setIndex == null) setIndex = info.set_index;
+      if (group === undefined) group = info.superset_group;
+      if (info.set_index !== setIndex || info.superset_group !== group) {
+        throw new HttpError(400, "Log one round at a time");
+      }
+      if (raw.length > 1 && !info.superset_group) throw new HttpError(400, "Log one round at a time");
+      if (set.is_cardio) throw new HttpError(400, "Cardio stays as written");
+      const weight = optionalNumber(record.weightLb, "Weight", 2000);
+      const reps = readNumber(record.reps, "Reps", 500);
+      if (weight == null) throw new HttpError(400, "Enter the weight");
+      if (reps <= 0) throw new HttpError(400, "Enter the reps");
+      await client.query(
+        "UPDATE sets SET weight_lb = $1, reps = $2, exercise_id = $3, logged_at = now() WHERE id = $4",
+        [weight, reps, set.exercise_id, setId],
+      );
+      exerciseIds.add(set.exercise_id);
+    }
+    for (const exerciseId of exerciseIds) await recomputePrs(client, exerciseId);
+    return sessionId;
+  });
+  return requireSession(saved);
+}
+
+async function supersetMembers(client: Queryable, sessionId: string, sxId: string) {
+  const found = await rows<SxRow & { completed_at: Date | null }>(
+    client,
+    `SELECT sx.*, e.pattern_key, e.pattern_label, e.muscles, sess.completed_at
+     FROM session_exercises sx
+     JOIN exercises e ON e.id = sx.exercise_id
+     JOIN sessions sess ON sess.id = sx.session_id
+     WHERE sx.id = $1 AND sx.session_id = $2`,
+    [sxId, sessionId],
+  );
+  const exercise = found[0];
+  if (!exercise) throw new HttpError(404, "Exercise not found");
+  if (exercise.completed_at) throw new HttpError(400, "This workout is already finished");
+  if (!exercise.superset_group) return [exercise];
+  const members = await rows<SxRow & { completed_at: Date | null }>(
+    client,
+    `SELECT sx.*, e.pattern_key, e.pattern_label, e.muscles, sess.completed_at
+     FROM session_exercises sx
+     JOIN exercises e ON e.id = sx.exercise_id
+     JOIN sessions sess ON sess.id = sx.session_id
+     WHERE sx.session_id = $1 AND sx.superset_group = $2
+     ORDER BY sx.superset_order, sx.sort_order`,
+    [sessionId, exercise.superset_group],
+  );
+  return members.length ? members : [exercise];
+}
+
+export async function addRound(sessionId: string, body: Record<string, unknown>): Promise<SessionDTO> {
+  const sxId = cleanText(body.sessionExerciseId, "Exercise", 80);
+  await tx(async (client) => {
+    const members = await supersetMembers(client, sessionId, sxId);
+    const ids = members.map((member) => member.id);
+    const last = await rows<{ set_index: number }>(
+      client,
+      "SELECT set_index FROM sets WHERE session_exercise_id = ANY($1::uuid[]) ORDER BY set_index DESC LIMIT 1",
+      [ids],
+    );
+    const nextIndex = (last[0]?.set_index ?? 0) + 1;
+    for (const member of members) {
+      const previous = await rows<{ weight_lb: number | null; reps: number | null; note: string | null }>(
+        client,
+        "SELECT weight_lb, reps, note FROM sets WHERE session_exercise_id = $1 ORDER BY set_index DESC LIMIT 1",
+        [member.id],
+      );
+      await client.query(
+        `INSERT INTO sets (id, session_exercise_id, exercise_id, set_index, weight_lb, reps, note, is_pr, migrated)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,false,false)`,
+        [
+          randomUUID(),
+          member.id,
+          member.exercise_id,
+          nextIndex,
+          member.is_cardio ? null : num(previous[0]?.weight_lb),
+          member.is_cardio ? null : (num(previous[0]?.reps) ?? member.rep_count),
+          member.is_cardio ? (previous[0]?.note ?? member.notes) : null,
+        ],
+      );
+    }
+  });
+  return requireSession(sessionId);
+}
+
+export async function removeRound(sessionId: string, body: Record<string, unknown>): Promise<SessionDTO> {
+  const sxId = cleanText(body.sessionExerciseId, "Exercise", 80);
+  await tx(async (client) => {
+    const members = await supersetMembers(client, sessionId, sxId);
+    const ids = members.map((member) => member.id);
+    const counts = await rows<{ session_exercise_id: string; n: number }>(
+      client,
+      "SELECT session_exercise_id, COUNT(*)::int AS n FROM sets WHERE session_exercise_id = ANY($1::uuid[]) GROUP BY session_exercise_id",
+      [ids],
+    );
+    if (counts.some((row) => Number(row.n) <= 1) || counts.length < ids.length) {
+      throw new HttpError(400, "Keep at least one set");
+    }
+    const highest = await rows<{ set_index: number }>(
+      client,
+      "SELECT set_index FROM sets WHERE session_exercise_id = ANY($1::uuid[]) ORDER BY set_index DESC LIMIT 1",
+      [ids],
+    );
+    const index = highest[0]?.set_index;
+    if (index == null) throw new HttpError(400, "Keep at least one set");
+    const doomed = await rows<{ id: string; exercise_id: string; logged_at: Date | null; is_cardio: boolean }>(
+      client,
+      `SELECT s.id, s.exercise_id, s.logged_at, sx.is_cardio
+       FROM sets s JOIN session_exercises sx ON sx.id = s.session_exercise_id
+       WHERE s.session_exercise_id = ANY($1::uuid[]) AND s.set_index = $2`,
+      [ids, index],
+    );
+    await client.query("DELETE FROM sets WHERE id = ANY($1::uuid[])", [doomed.map((set) => set.id)]);
+    for (const memberId of ids) {
+      const remaining = await rows<{ id: string }>(
+        client,
+        "SELECT id FROM sets WHERE session_exercise_id = $1 ORDER BY set_index",
+        [memberId],
+      );
+      for (let position = 0; position < remaining.length; position += 1) {
+        await client.query("UPDATE sets SET set_index = $1 WHERE id = $2", [position + 1, remaining[position].id]);
+      }
+    }
+    const seen = new Set<string>();
+    for (const set of doomed) {
+      if (!set.logged_at || set.is_cardio || seen.has(set.exercise_id)) continue;
+      seen.add(set.exercise_id);
+      await recomputePrs(client, set.exercise_id);
+    }
   });
   return requireSession(sessionId);
 }
@@ -1004,8 +1182,8 @@ export async function swapExercise(sessionId: string, body: Record<string, unkno
       await client.query(
         `INSERT INTO session_exercises (
            id, session_id, program_exercise_id, exercise_id, name, sort_order, sets, reps_label, rep_count,
-           measure, per_side, notes, is_cardio, cardio_min
-         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,false,$13)`,
+           measure, per_side, notes, is_cardio, cardio_min, superset_group, superset_order
+         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,false,$13,$14,$15)`,
         [
           newId,
           sessionId,
@@ -1020,6 +1198,8 @@ export async function swapExercise(sessionId: string, body: Record<string, unkno
           exercise.per_side,
           exercise.notes,
           exercise.cardio_min,
+          exercise.superset_group,
+          exercise.superset_order,
         ],
       );
       for (let index = 1; index <= remaining; index += 1) {
@@ -1110,13 +1290,14 @@ export async function exerciseHistory(exerciseId: string): Promise<ExerciseHisto
     logged_at: Date;
     is_pr: boolean;
     duration_sec: number | null;
+    migrated: boolean;
     per_side: boolean;
     session_id: string;
     workout_name: string;
     started_at: Date;
   }>(
     pool,
-    `SELECT s.weight_lb, s.reps, s.logged_at, s.is_pr, s.duration_sec, sx.per_side, sx.session_id,
+    `SELECT s.weight_lb, s.reps, s.logged_at, s.is_pr, s.duration_sec, s.migrated, sx.per_side, sx.session_id,
             sess.name AS workout_name, sess.started_at
      FROM sets s
      JOIN session_exercises sx ON sx.id = s.session_exercise_id
@@ -1146,7 +1327,7 @@ export async function exerciseHistory(exerciseId: string): Promise<ExerciseHisto
           ? set.duration_sec != null
             ? `${Math.round(Number(set.duration_sec) / 60)} min`
             : "Cardio"
-          : formatPerformance(num(set.weight_lb), num(set.reps), exercise.measure, set.per_side),
+          : `${formatPerformance(num(set.weight_lb), num(set.reps), exercise.measure, set.per_side)}${set.migrated ? " · migrated" : ""}`,
         isPr: set.is_pr,
       })),
     };
@@ -1460,14 +1641,18 @@ export async function coachReview(from: string, to: string) {
     ? await rows<{
         id: string;
         session_id: string;
+        exercise_id: string;
         name: string;
         measure: string;
         per_side: boolean;
         is_cardio: boolean;
         sort_order: number;
+        superset_group: string | null;
+        superset_order: number | null;
       }>(
         pool,
-        "SELECT id, session_id, name, measure, per_side, is_cardio, sort_order FROM session_exercises WHERE session_id = ANY($1::uuid[]) ORDER BY sort_order",
+        `SELECT id, session_id, exercise_id, name, measure, per_side, is_cardio, sort_order, superset_group, superset_order
+         FROM session_exercises WHERE session_id = ANY($1::uuid[]) ORDER BY sort_order, superset_order`,
         [sessionIds],
       )
     : [];
@@ -1483,9 +1668,10 @@ export async function coachReview(from: string, to: string) {
         note: string | null;
         logged_at: Date;
         set_index: number;
+        migrated: boolean;
       }>(
         pool,
-        "SELECT session_exercise_id, weight_lb, reps, duration_sec, is_pr, pr_kind, note, logged_at, set_index FROM sets WHERE session_exercise_id = ANY($1::uuid[]) AND logged_at IS NOT NULL ORDER BY set_index",
+        "SELECT session_exercise_id, weight_lb, reps, duration_sec, is_pr, pr_kind, note, logged_at, set_index, migrated FROM sets WHERE session_exercise_id = ANY($1::uuid[]) AND logged_at IS NOT NULL ORDER BY set_index",
         [sxIds],
       )
     : [];
@@ -1526,10 +1712,13 @@ export async function coachReview(from: string, to: string) {
           exercises: exercises
             .filter((exercise) => exercise.session_id === session.id)
             .map((exercise) => ({
+              exerciseId: exercise.exercise_id,
               name: exercise.name,
               measure: exercise.measure,
               perSide: exercise.per_side,
               isCardio: exercise.is_cardio,
+              supersetGroup: exercise.superset_group,
+              supersetOrder: exercise.superset_order,
               sets: sets
                 .filter((set) => set.session_exercise_id === exercise.id)
                 .map((set) => ({
@@ -1539,6 +1728,7 @@ export async function coachReview(from: string, to: string) {
                   isPr: set.is_pr,
                   prKind: set.pr_kind,
                   note: set.note,
+                  migrated: Boolean(set.migrated),
                 })),
             })),
         })),
