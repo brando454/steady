@@ -29,9 +29,6 @@ struct TodayView: View {
             )
           }
         }
-        if let day = today.glucoseDay {
-          DayGlucoseChart(day: day)
-        }
         if let suggestion = today.suggestion {
           if suggestion.completedToday {
             CompletedTodayCard(suggestion: suggestion) {

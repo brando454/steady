@@ -408,28 +408,7 @@ export async function getToday(): Promise<TodayDTO> {
   const settings = await getSettings();
   const week = await getWeek();
   await retryNightscoutNotes();
-  const meals = await mealsWithGlucose(today);
-  const workouts = await rows<{ id: string; name: string; started_at: Date }>(
-    pool,
-    `SELECT id, name, started_at FROM sessions
-     WHERE (started_at AT TIME ZONE 'America/Boise')::date = $1::date
-     ORDER BY started_at`,
-    [today],
-  );
-  const glucoseDay = await dayGlucose({
-    start: wallTimeToUtc(today, "00:00"),
-    now,
-    meals: meals.map((meal) => ({
-      id: meal.id,
-      name: meal.name,
-      loggedAt: new Date(meal.loggedAt),
-      calories: meal.calories,
-      protein: meal.protein,
-      carbs: meal.carbs,
-      fat: meal.fat,
-    })),
-    workouts: workouts.map((workout) => ({ id: workout.id, name: workout.name, startedAt: workout.started_at })),
-  });
+  const meals = await mealsOn(today);
   const totals = dailyTotals(meals);
   const targets = targetsOf(settings);
   const finishedToday = await rows<{ id: string; day_id: string }>(
@@ -493,7 +472,6 @@ export async function getToday(): Promise<TodayDTO> {
     totals,
     left: macrosLeft(totals, targets),
     meals,
-    glucoseDay,
     suggestion: selected && focus
       ? {
           dayId: selected.id,
@@ -1224,6 +1202,33 @@ export async function foodDay(dateInput: unknown): Promise<FoodDayDTO> {
   const now = new Date();
   await retryNightscoutNotes();
   const meals = await mealsWithGlucose(date);
+  const settings = await getSettings();
+  const totals = dailyTotals(meals);
+  const targets = targetsOf(settings);
+  const start = wallTimeToUtc(date, "00:00");
+  const dayEnd = wallTimeToUtc(addDays(date, 1), "00:00");
+  const cap = new Date(Math.min(now.getTime(), dayEnd.getTime() - 1));
+  const workouts = await rows<{ id: string; name: string; started_at: Date }>(
+    pool,
+    `SELECT id, name, started_at FROM sessions
+     WHERE (started_at AT TIME ZONE 'America/Boise')::date = $1::date
+     ORDER BY started_at`,
+    [date],
+  );
+  const glucoseDay = await dayGlucose({
+    start,
+    now: cap,
+    meals: meals.map((meal) => ({
+      id: meal.id,
+      name: meal.name,
+      loggedAt: new Date(meal.loggedAt),
+      calories: meal.calories,
+      protein: meal.protein,
+      carbs: meal.carbs,
+      fat: meal.fat,
+    })),
+    workouts: workouts.map((workout) => ({ id: workout.id, name: workout.name, startedAt: workout.started_at })),
+  });
   const favorites = await rows<{
     id: string;
     name: string;
@@ -1249,6 +1254,10 @@ export async function foodDay(dateInput: unknown): Promise<FoodDayDTO> {
     meals,
     favorites: favoriteDTOs,
     aiConfigured: aiConfigured(),
+    totals,
+    targets,
+    left: macrosLeft(totals, targets),
+    glucoseDay,
   };
 }
 

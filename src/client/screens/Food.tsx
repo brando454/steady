@@ -5,8 +5,9 @@ import { mealEntryIsBlank, usualActionLabel } from "../../shared/logic";
 import { civilDate, timeValue } from "../../shared/time";
 import type { FavoriteDTO, FoodDayDTO } from "../../shared/types";
 import { alignToTopOfMain, beginMainScrollHold, reassertMainScroll } from "../scroll";
+import { DayGlucoseChart } from "../DayGlucose";
 import { MealGlucoseCard } from "../MealGlucose";
-import { Banner, Confirm, useNav, useToast } from "../ui";
+import { Banner, Confirm, Macro, Ring, useNav, useToast } from "../ui";
 
 type FormState = {
   name: string;
@@ -110,7 +111,8 @@ export function FoodScreen({ search }: { search: URLSearchParams }) {
   }, [bringEstimate]);
 
   useEffect(() => {
-    if (!food?.meals.some((meal) => meal.glucose?.inProgress)) return;
+    const live = Boolean(food?.glucoseDay) || Boolean(food?.meals.some((meal) => meal.glucose?.inProgress));
+    if (!live) return;
     let stop = false;
     const id = window.setInterval(() => {
       const query = date ? `?date=${encodeURIComponent(date)}` : "";
@@ -388,8 +390,25 @@ export function FoodScreen({ search }: { search: URLSearchParams }) {
   const carbs = num(form.carbs);
   const editing = Boolean(editId && appliedEdit.current === editId);
 
+  const over = (food?.left.calories ?? 0) < 0;
+
   return (
     <>
+      {food && (
+        <section className="card overview">
+          <Ring
+            consumed={food.totals.calories}
+            target={food.targets.calories}
+            center={formatInt(Math.abs(food.left.calories))}
+            caption={over ? "kcal over" : "kcal left"}
+          />
+          <div className="macro-stack">
+            <Macro name="Protein" value={food.totals.protein} target={food.targets.protein} unit="g" />
+            <Macro name="Carbs" value={food.totals.carbs} target={food.targets.carbs} unit="g" />
+            <Macro name="Fat" value={food.totals.fat} target={food.targets.fat} unit="g" />
+          </div>
+        </section>
+      )}
       <h1>{editing ? "Edit meal" : "Log a meal"}</h1>
       <Banner text={error} />
 
@@ -550,6 +569,8 @@ export function FoodScreen({ search }: { search: URLSearchParams }) {
           <input type="time" value={time} onChange={(event) => setTime(event.target.value.slice(0, 5))} />
         </label>
       </div>
+
+      {food?.glucoseDay && <DayGlucoseChart day={food.glucoseDay} />}
 
       <section className="card">
         <h2>Logged</h2>
