@@ -64,6 +64,15 @@ final class APIClient {
   func logSet(_ id: String, body: [String: AnyEncodable]) async throws -> WorkoutSession {
     try await send("POST", "/api/sets/\(enc(id))/log", body: body)
   }
+  func logRound(_ sessionId: String, sets: [RoundSetBody]) async throws -> WorkoutSession {
+    try await send("POST", "/api/sessions/\(enc(sessionId))/rounds", body: ["sets": AnyEncodable(sets)])
+  }
+  func addRound(_ sessionId: String, sessionExerciseId: String) async throws -> WorkoutSession {
+    try await send("POST", "/api/sessions/\(enc(sessionId))/rounds/add", body: ["sessionExerciseId": AnyEncodable(sessionExerciseId)])
+  }
+  func removeRound(_ sessionId: String, sessionExerciseId: String) async throws -> WorkoutSession {
+    try await send("POST", "/api/sessions/\(enc(sessionId))/rounds/remove", body: ["sessionExerciseId": AnyEncodable(sessionExerciseId)])
+  }
   func deleteSet(_ id: String) async throws -> WorkoutSession { try await send("DELETE", "/api/sets/\(enc(id))") }
   func history() async throws -> [HistoryItem] { try await send("GET", "/api/history") }
   func exerciseHistory(_ id: String) async throws -> ExerciseHistory { try await send("GET", "/api/exercises/\(enc(id))/history") }

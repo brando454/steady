@@ -20,6 +20,8 @@ export type SlotSeed = {
   notes?: string;
   isCardio?: boolean;
   cardioMin?: number;
+  supersetGroup?: string;
+  supersetOrder?: number;
 };
 
 export type DaySeed = {
@@ -100,6 +102,14 @@ export const EXERCISES: ExerciseSeed[] = [
   lift("swiss-ball-curl", "Swiss ball leg curl", "knee-flexion", "Knee flexion", "Hamstrings"),
   lift("nordic-curl", "Nordic curl", "knee-flexion", "Knee flexion", "Hamstrings"),
   lift("curl-pushdown", "DB curl + pushdown", "arms", "Arms", "Biceps, triceps"),
+  lift("db-curl", "DB curl", "curl", "Curl", "Biceps"),
+  lift("barbell-curl", "Barbell curl", "curl", "Curl", "Biceps"),
+  lift("hammer-curl-single", "Hammer curl", "curl", "Curl", "Biceps"),
+  lift("machine-curl", "Machine curl", "curl", "Curl", "Biceps"),
+  lift("pushdown", "Pushdown", "pushdown", "Pushdown", "Triceps"),
+  lift("cable-pushdown", "Cable pushdown", "pushdown", "Pushdown", "Triceps"),
+  lift("overhead-extension", "Overhead extension", "pushdown", "Pushdown", "Triceps"),
+  lift("rope-pushdown", "Rope pushdown", "pushdown", "Pushdown", "Triceps"),
   lift("barbell-curl-pushdown", "Barbell curl + cable pushdown", "arms", "Arms", "Biceps, triceps"),
   lift("hammer-curl", "Hammer curl + overhead extension", "arms", "Arms", "Biceps, triceps"),
   lift("machine-curl-pushdown", "Machine curl + rope pushdown", "arms", "Arms", "Biceps, triceps"),
@@ -172,7 +182,10 @@ export const SUBSTITUTES: Record<string, string[]> = {
   "weighted-pull-up": ["lat-pulldown", "assisted-pull-up", "chin-up", "pull-up"],
   "leg-press": ["hack-squat", "back-squat", "smith-squat", "goblet-squat"],
   "leg-curl": ["seated-leg-curl", "swiss-ball-curl", "nordic-curl"],
+  "face-pull": ["reverse-fly", "band-pull-apart", "rear-delt-machine"],
   "face-pull-lateral": ["reverse-fly", "band-pull-apart", "face-pull", "rear-delt-machine"],
+  "db-curl": ["barbell-curl", "hammer-curl-single", "machine-curl"],
+  pushdown: ["cable-pushdown", "overhead-extension", "rope-pushdown"],
   "curl-pushdown": ["barbell-curl-pushdown", "hammer-curl", "machine-curl-pushdown"],
   "goblet-or-lunge": ["leg-press", "bulgarian-split-squat", "step-up", "hack-squat"],
   "pushup-or-press": ["db-bench", "machine-chest-press", "smith-bench", "bench-press"],
@@ -241,8 +254,10 @@ export const DAYS: DaySeed[] = [
       { exerciseId: "weighted-pull-up", sets: 4, repsLabel: "6–8", repCount: 6 },
       { exerciseId: "leg-press", sets: 3, repsLabel: "10", repCount: 10 },
       { exerciseId: "leg-curl", sets: 3, repsLabel: "12", repCount: 12 },
-      { exerciseId: "face-pull-lateral", sets: 3, repsLabel: "15", repCount: 15 },
-      { exerciseId: "curl-pushdown", sets: 3, repsLabel: "12", repCount: 12 },
+      { exerciseId: "face-pull", sets: 3, repsLabel: "15", repCount: 15, supersetGroup: "ss-face-lateral", supersetOrder: 1 },
+      { exerciseId: "lateral-raise", sets: 3, repsLabel: "15", repCount: 15, supersetGroup: "ss-face-lateral", supersetOrder: 2 },
+      { exerciseId: "db-curl", sets: 3, repsLabel: "12", repCount: 12, supersetGroup: "ss-curl-pushdown", supersetOrder: 1 },
+      { exerciseId: "pushdown", sets: 3, repsLabel: "12", repCount: 12, supersetGroup: "ss-curl-pushdown", supersetOrder: 2 },
       easyCardio,
     ],
   },
@@ -307,7 +322,10 @@ export const BASE_WEIGHTS: Record<string, { weight: number; scale?: number }> = 
   "weighted-pull-up": { weight: 25, scale: 0.5 },
   "leg-press": { weight: 360, scale: 2 },
   "leg-curl": { weight: 90 },
+  "face-pull": { weight: 20, scale: 0.25 },
   "face-pull-lateral": { weight: 20, scale: 0.25 },
+  "db-curl": { weight: 30, scale: 0.25 },
+  pushdown: { weight: 30, scale: 0.25 },
   "curl-pushdown": { weight: 30, scale: 0.25 },
   "goblet-or-lunge": { weight: 50, scale: 0.5 },
   "pushup-or-press": { weight: 40, scale: 0.5 },

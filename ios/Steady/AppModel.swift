@@ -501,34 +501,56 @@ final class AppModel: ObservableObject {
   }
 
   private func logCurrentNow() async {
-    guard let session, let current = currentPair(), current.set.loggedAt == nil, let draft = drafts[current.set.id] else { return }
-    guard canLog(current.exercise, draft) else {
+    guard let session, let current = currentPair(), current.set.loggedAt == nil else { return }
+    let round = unloggedRound(current.exercise, current.set, session)
+    let ready = round.compactMap { pair -> (SessionExercise, WorkoutSet, SetDraft)? in
+      guard let draft = drafts[pair.1.id] else { return nil }
+      return (pair.0, pair.1, draft)
+    }
+    guard ready.count == round.count, ready.allSatisfy({ canLog($0.0, $0.2) }) else {
       banner = current.exercise.isCardio ? "Enter the minutes" : "Enter the weight and reps"
       return
     }
     let before = Set(session.exercises.flatMap { $0.sets.filter(\.isPr).map(\.id) })
-    let body = setBody(current.exercise, draft)
+    let label = restLabel(current.exercise, session)
+    let reps = ready.map { Double($0.2.reps) ?? $0.0.repCount }.min() ?? current.exercise.repCount
+    let superset = ready.count > 1 || (current.exercise.supersetGroup?.isEmpty == false && ready.count >= 1 && !current.exercise.isCardio && supersetMembers(current.exercise, session).count > 1)
     if session.isLocal {
-      recordLocal(kind: "log", exercise: current.exercise, set: current.set, draft: draft, createdSetId: nil, createdExerciseId: nil, swapId: nil, scope: nil, custom: nil)
-      markLogged(setId: current.set.id, draft: draft, exercise: current.exercise)
+      for item in ready {
+        recordLocal(kind: "log", exercise: item.0, set: item.1, draft: item.2, createdSetId: nil, createdExerciseId: nil, swapId: nil, scope: nil, custom: nil)
+        markLogged(setId: item.1.id, draft: item.2, exercise: item.0)
+      }
       didLogSet()
-      beginRest(current.exercise, draft)
+      if !current.exercise.isCardio { beginRest(name: label, reps: reps) }
       return
     }
     do {
-      let next = try await api.logSet(current.set.id, body: body)
+      let next: WorkoutSession
+      if superset {
+        let sets = ready.map { RoundSetBody(id: $0.1.id, weightLb: Double($0.2.weight) ?? 0, reps: Double($0.2.reps) ?? 0) }
+        next = try await api.logRound(session.id, sets: sets)
+      } else {
+        next = try await api.logSet(ready[0].1.id, body: setBody(ready[0].0, ready[0].2))
+      }
       notePrs(before: before, session: next)
       adopt(next, keepDrafts: true)
       didLogSet()
-      beginRest(current.exercise, draft)
+      if !current.exercise.isCardio { beginRest(name: label, reps: reps) }
       banner = nil
     } catch {
       if APIError.isOffline(error) {
         online = false
-        queue(method: "POST", path: "/api/sets/\(current.set.id)/log", body: body)
-        markLogged(setId: current.set.id, draft: draft, exercise: current.exercise)
+        if superset {
+          let sets = ready.map { RoundSetBody(id: $0.1.id, weightLb: Double($0.2.weight) ?? 0, reps: Double($0.2.reps) ?? 0) }
+          queue(method: "POST", path: "/api/sessions/\(session.id)/rounds", body: ["sets": AnyEncodable(sets)])
+        } else {
+          queue(method: "POST", path: "/api/sets/\(ready[0].1.id)/log", body: setBody(ready[0].0, ready[0].2))
+        }
+        for item in ready {
+          markLogged(setId: item.1.id, draft: item.2, exercise: item.0)
+        }
         didLogSet()
-        beginRest(current.exercise, draft)
+        if !current.exercise.isCardio { beginRest(name: label, reps: reps) }
       } else if await recover(error) {
         await logCurrentNow()
       }
@@ -557,6 +579,10 @@ final class AppModel: ObservableObject {
 
   private func addSetNow(_ exerciseId: String) async {
     guard let session, let exercise = session.exercises.first(where: { $0.id == exerciseId }) else { return }
+    if supersetMembers(exercise, session).count > 1 {
+      await addRoundNow(exercise, session)
+      return
+    }
     if session.isLocal {
       let newId = "local-\(UUID().uuidString)"
       var next = session
@@ -594,6 +620,10 @@ final class AppModel: ObservableObject {
 
   private func removeLastNow(_ exerciseId: String) async {
     guard let session, let exercise = session.exercises.first(where: { $0.id == exerciseId }) else { return }
+    if supersetMembers(exercise, session).count > 1 {
+      await removeRoundNow(exercise, session)
+      return
+    }
     guard let set = exercise.sets.sorted(by: { $0.setIndex < $1.setIndex }).last else { return }
     if exercise.sets.count <= 1 {
       banner = "Keep at least one set"
@@ -942,14 +972,12 @@ final class AppModel: ObservableObject {
     }
   }
 
-  private func beginRest(_ exercise: SessionExercise, _ draft: SetDraft) {
-    guard !exercise.isCardio else { return }
-    let reps = Double(draft.reps) ?? exercise.repCount
+  private func beginRest(name: String, reps: Double) {
     let seconds = RestClock.seconds(forReps: reps)
     Task {
-      let started = await rest.start(name: exercise.name, seconds: seconds)
+      let started = await rest.start(name: name, seconds: seconds)
       restEnds = started.ends
-      restName = exercise.name
+      restName = name
       restPlanned = started.planned
       notificationsOn = started.allowed
     }
@@ -1073,6 +1101,108 @@ final class AppModel: ObservableObject {
     return session.currentSet()
   }
 
+  private func supersetMembers(_ exercise: SessionExercise, _ session: WorkoutSession) -> [SessionExercise] {
+    guard let group = exercise.supersetGroup, !group.isEmpty else { return [exercise] }
+    let members = session.exercises.filter { $0.supersetGroup == group }
+    return members.count > 1 ? members.sorted { ($0.supersetOrder ?? 0) < ($1.supersetOrder ?? 0) } : [exercise]
+  }
+
+  private func unloggedRound(_ exercise: SessionExercise, _ set: WorkoutSet, _ session: WorkoutSession) -> [(SessionExercise, WorkoutSet)] {
+    let members = supersetMembers(exercise, session)
+    if members.count < 2 { return [(exercise, set)] }
+    let pairs = members.compactMap { member -> (SessionExercise, WorkoutSet)? in
+      guard let mate = member.sets.first(where: { $0.setIndex == set.setIndex && $0.loggedAt == nil }) else { return nil }
+      return (member, mate)
+    }
+    return pairs.isEmpty ? [(exercise, set)] : pairs
+  }
+
+  private func restLabel(_ exercise: SessionExercise, _ session: WorkoutSession) -> String {
+    let members = supersetMembers(exercise, session)
+    guard members.count > 1 else { return exercise.name }
+    return "Superset · " + members.map(\.name).joined(separator: " + ")
+  }
+
+  private func addRoundNow(_ exercise: SessionExercise, _ session: WorkoutSession) async {
+    let members = supersetMembers(exercise, session)
+    if session.isLocal {
+      var next = session
+      let nextIndex = (members.flatMap(\.sets).map(\.setIndex).max() ?? 0) + 1
+      for member in members {
+        guard let index = next.exercises.firstIndex(where: { $0.id == member.id }) else { continue }
+        let last = next.exercises[index].sets.max { $0.setIndex < $1.setIndex }
+        let newId = "local-\(UUID().uuidString)"
+        let set = WorkoutSet(
+          id: newId,
+          setIndex: nextIndex,
+          weightLb: member.isCardio ? nil : last?.weightLb,
+          reps: member.isCardio ? nil : (last?.reps ?? member.repCount),
+          durationSec: nil,
+          note: member.isCardio ? last?.note : nil,
+          isPr: false,
+          prKind: nil,
+          loggedAt: nil,
+          label: ""
+        )
+        next.exercises[index].sets.append(set)
+        self.session = next
+        recordLocal(kind: "add", exercise: member, set: set, draft: nil, createdSetId: newId, createdExerciseId: nil, swapId: nil, scope: nil, custom: nil)
+      }
+      replaceLocalSession(next)
+      adopt(next, keepDrafts: true)
+      return
+    }
+    do {
+      let next = try await api.addRound(session.id, sessionExerciseId: exercise.id)
+      adopt(next, keepDrafts: true)
+    } catch {
+      if APIError.isOffline(error) {
+        banner = "Adding a set needs a connection on a workout that already lives on the server. Try again when you're back online."
+      } else if await recover(error) {
+        await addRoundNow(exercise, session)
+      }
+    }
+  }
+
+  private func removeRoundNow(_ exercise: SessionExercise, _ session: WorkoutSession) async {
+    let members = supersetMembers(exercise, session)
+    if members.contains(where: { $0.sets.count <= 1 }) {
+      banner = "Keep at least one set"
+      return
+    }
+    if session.isLocal {
+      var next = session
+      for member in members {
+        guard let index = next.exercises.firstIndex(where: { $0.id == member.id }) else { continue }
+        guard let set = next.exercises[index].sets.max(by: { $0.setIndex < $1.setIndex }) else { continue }
+        next.exercises[index].sets.removeAll { $0.id == set.id }
+        self.session = next
+        recordLocal(kind: "delete", exercise: member, set: set, draft: drafts[set.id], createdSetId: nil, createdExerciseId: nil, swapId: nil, scope: nil, custom: nil)
+      }
+      replaceLocalSession(next)
+      adopt(next, keepDrafts: true)
+      return
+    }
+    do {
+      let next = try await api.removeRound(session.id, sessionExerciseId: exercise.id)
+      adopt(next, keepDrafts: true)
+    } catch {
+      if APIError.isOffline(error) {
+        online = false
+        queue(method: "POST", path: "/api/sessions/\(session.id)/rounds/remove", body: ["sessionExerciseId": AnyEncodable(exercise.id)])
+        var next = session
+        let indexToDrop = members.flatMap(\.sets).map(\.setIndex).max() ?? 0
+        for member in members {
+          guard let index = next.exercises.firstIndex(where: { $0.id == member.id }) else { continue }
+          next.exercises[index].sets.removeAll { $0.setIndex == indexToDrop }
+        }
+        adopt(next, keepDrafts: true)
+      } else if await recover(error) {
+        await removeRoundNow(exercise, session)
+      }
+    }
+  }
+
   private func find(setId: String) -> (exercise: SessionExercise, set: WorkoutSet)? {
     guard let session else { return nil }
     for exercise in session.exercises {
@@ -1128,6 +1258,8 @@ final class AppModel: ObservableObject {
         lastTime: "—",
         lastWeightLb: slot.lastWeightLb,
         prLine: "—",
+        supersetGroup: slot.supersetGroup,
+        supersetOrder: slot.supersetOrder,
         swaps: slot.swaps,
         sets: sets
       )

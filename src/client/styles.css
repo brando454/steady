@@ -693,6 +693,34 @@ textarea { min-height: 88px; resize: vertical; }
   scroll-margin-bottom: 154px;
 }
 .set-row.now { background: var(--accent-soft); }
+.superset-card { display: flex; flex-direction: column; gap: 14px; }
+.ss-title { font-size: 16px; font-weight: 600; margin: 0; }
+.ss-identities { display: flex; flex-direction: column; gap: 12px; }
+.ss-meta { margin: 2px 0 0; font-size: 12px; font-weight: 400; }
+.ss-round {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 10px 8px 12px;
+  border-radius: 10px;
+  background: var(--bg);
+  scroll-margin-bottom: 154px;
+}
+.ss-round.now { background: var(--accent-soft); }
+.ss-move { display: flex; flex-direction: column; gap: 6px; }
+.ss-move-name {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 14px;
+  font-weight: 600;
+}
+.ss-controls { display: flex; flex-wrap: wrap; gap: 8px; }
+.migrated {
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--muted);
+}
 .set-label {
   border: 0;
   background: transparent;

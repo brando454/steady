@@ -36,7 +36,10 @@ import {
   getWeights,
   listHistory,
   logFavorite,
+  addRound,
+  logRound,
   logSet,
+  removeRound,
   saveFavorite,
   saveSettings,
   saveWeight,
@@ -209,6 +212,9 @@ export function createApp(passcode: string) {
   app.post("/api/session-exercises/:id/sets", asyncRoute(async (req, res) => res.json(await addSet(req.params.id))));
   app.patch("/api/sets/:id", asyncRoute(async (req, res) => res.json(await updatePlannedSet(req.params.id, req.body ?? {}))));
   app.post("/api/sets/:id/log", asyncRoute(async (req, res) => res.json(await logSet(req.params.id, req.body ?? {}))));
+  app.post("/api/sessions/:id/rounds", asyncRoute(async (req, res) => res.json(await logRound(req.params.id, req.body ?? {}))));
+  app.post("/api/sessions/:id/rounds/add", asyncRoute(async (req, res) => res.json(await addRound(req.params.id, req.body ?? {}))));
+  app.post("/api/sessions/:id/rounds/remove", asyncRoute(async (req, res) => res.json(await removeRound(req.params.id, req.body ?? {}))));
   app.delete("/api/sets/:id", asyncRoute(async (req, res) => res.json(await deleteSet(req.params.id))));
 
   app.get("/api/history", asyncRoute(async (_req, res) => res.json(await listHistory())));

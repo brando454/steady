@@ -39,6 +39,7 @@ export type SetDTO = {
   prKind: "weight" | "e1rm" | null;
   loggedAt: string | null;
   label: string;
+  migrated: boolean;
 };
 
 export type SessionExerciseDTO = {
@@ -59,6 +60,8 @@ export type SessionExerciseDTO = {
   lastTime: string;
   lastWeightLb: number | null;
   prLine: string;
+  supersetGroup: string | null;
+  supersetOrder: number | null;
   swaps: { id: string; name: string }[];
   sets: SetDTO[];
 };
@@ -102,6 +105,8 @@ export type ProgramExerciseDTO = {
   notes: string | null;
   isCardio: boolean;
   cardioMin: number | null;
+  supersetGroup: string | null;
+  supersetOrder: number | null;
   swaps: { id: string; name: string }[];
   lastWeightLb: number | null;
 };

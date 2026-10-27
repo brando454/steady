@@ -3,6 +3,7 @@ import { createPortal } from "react-dom";
 import { api, messageOf } from "../api";
 import type { GlucoseDTO, SessionDTO, SessionExerciseDTO, SetDTO } from "../../shared/types";
 import { commitFocusedSetDraft } from "../../shared/logic";
+import { exerciseBlocks, restSecondsForRound } from "../../shared/superset";
 import { alignToTopOfMain, beginMainScrollHold, reassertMainScroll, rememberMainScroll, restoreArmed, revealCurrentSet, shouldRevealCurrentSet, useRestoreMainScroll } from "../scroll";
 import { WorkoutGlucoseView } from "../WorkoutGlucose";
 import { Back, Banner, Confirm, TrendArrow, useNav, useNow } from "../ui";
@@ -264,18 +265,34 @@ export function SessionScreen({ sessionId }: { sessionId: string }) {
 
   async function logCurrent() {
     if (logging.current || !session || !current) return;
-    const base = drafts[current.set.id];
-    if (!base) return;
     const active = document.activeElement;
-    const draft = commitFocusedSetDraft(
-      base,
+    const focused =
       active instanceof HTMLInputElement
-        ? { label: active.getAttribute("aria-label") ?? "", value: active.value }
-        : null,
+        ? {
+            setId: active.dataset.setId || current.set.id,
+            label: active.getAttribute("aria-label") ?? "",
+            value: active.value,
+          }
+        : null;
+    const members = current.exercise.supersetGroup
+      ? session.exercises
+          .filter((exercise) => exercise.supersetGroup === current.exercise.supersetGroup)
+          .sort((a, b) => (a.supersetOrder ?? 0) - (b.supersetOrder ?? 0) || a.sortOrder - b.sortOrder)
+      : [current.exercise];
+    const pending = members.flatMap((exercise) => {
+      const set = exercise.sets.find((item) => item.setIndex === current.set.setIndex && !item.loggedAt);
+      if (!set) return [];
+      const base = drafts[set.id];
+      if (!base) return [];
+      const draft = focused && focused.setId === set.id ? commitFocusedSetDraft(base, focused) : base;
+      return [{ exercise, set, draft }];
+    });
+    if (!pending.length) return;
+    const ready = pending.every(({ exercise, draft }) =>
+      exercise.isCardio
+        ? Number(draft.minutes) > 0
+        : draft.weight !== "" && Number.isFinite(Number(draft.weight)) && Number(draft.reps) > 0,
     );
-    const ready = current.exercise.isCardio
-      ? Number(draft.minutes) > 0
-      : draft.weight !== "" && Number.isFinite(Number(draft.weight)) && Number(draft.reps) > 0;
     if (!ready) {
       setError(current.exercise.isCardio ? "Enter the minutes" : "Enter the weight and reps");
       return;
@@ -283,19 +300,30 @@ export function SessionScreen({ sessionId }: { sessionId: string }) {
     logging.current = true;
     beginMainScrollHold();
     if (active instanceof HTMLElement) active.blur();
-    setDrafts((prev) => ({ ...prev, [current.set.id]: draft }));
+    setDrafts((prev) => {
+      const next = { ...prev };
+      for (const item of pending) next[item.set.id] = item.draft;
+      return next;
+    });
     setBusy(true);
     setError(null);
     if (patchTimer.current) window.clearTimeout(patchTimer.current);
     const before = new Set(session.exercises.flatMap((exercise) => exercise.sets.filter((set) => set.isPr).map((set) => set.id)));
-    const body = current.exercise.isCardio
-      ? { minutes: Number(draft.minutes), note: draft.note }
-      : { weightLb: Number(draft.weight), reps: Number(draft.reps) };
+    const superset = Boolean(current.exercise.supersetGroup);
+    const path = superset ? `/api/sessions/${session.id}/rounds` : `/api/sets/${pending[0].set.id}/log`;
+    const body = superset
+      ? {
+          sets: pending.map(({ set, draft }) => ({
+            id: set.id,
+            weightLb: Number(draft.weight),
+            reps: Number(draft.reps),
+          })),
+        }
+      : current.exercise.isCardio
+        ? { minutes: Number(pending[0].draft.minutes), note: pending[0].draft.note }
+        : { weightLb: Number(pending[0].draft.weight), reps: Number(pending[0].draft.reps) };
     try {
-      const next = await api<SessionDTO>(`/api/sets/${current.set.id}/log`, {
-        method: "POST",
-        body: JSON.stringify(body),
-      });
+      const next = await api<SessionDTO>(path, { method: "POST", body: JSON.stringify(body) });
       const fresh = next.exercises
         .flatMap((exercise) => exercise.sets)
         .filter((set) => set.isPr && !before.has(set.id))
@@ -307,8 +335,7 @@ export function SessionScreen({ sessionId }: { sessionId: string }) {
         }, 4000);
       }
       if (!current.exercise.isCardio) {
-        const reps = Number(draft.reps);
-        const seconds = reps <= 6 ? 150 : reps <= 10 ? 90 : 60;
+        const seconds = restSecondsForRound(pending.map((item) => Number(item.draft.reps)));
         buzzed.current = false;
         setRest({ ends: Date.now() + seconds * 1000 });
       }
@@ -325,11 +352,11 @@ export function SessionScreen({ sessionId }: { sessionId: string }) {
     }
   }
 
-  async function mutate(path: string, method: string, prefer?: string | null) {
+  async function mutate(path: string, method: string, prefer?: string | null, body?: unknown) {
     setBusy(true);
     setError(null);
     try {
-      const next = await api<SessionDTO>(path, { method });
+      const next = await api<SessionDTO>(path, { method, body: body == null ? undefined : JSON.stringify(body) });
       remember(next, prefer);
       reassertMainScroll();
     } catch (err) {
@@ -489,7 +516,142 @@ export function SessionScreen({ sessionId }: { sessionId: string }) {
         document.body,
       )}
 
-      {session.exercises.map((exercise) => (
+      {exerciseBlocks(session.exercises).map((block) => {
+        if (block.kind === "superset") {
+          const members = block.exercises;
+          const indexes = [...new Set(members.flatMap((exercise) => exercise.sets.map((set) => set.setIndex)))].sort((a, b) => a - b);
+          return (
+            <section className="card superset-card" key={block.group} data-scroll-anchor={members[0]?.id}>
+              <h2 className="ex-name ss-title">{block.title}</h2>
+              <div className="ss-identities">
+                {members.map((exercise) => (
+                  <div key={exercise.id} className="ss-identity" data-scroll-anchor={exercise.id}>
+                    <div className="ex-head">
+                      <div>
+                        <button
+                          type="button"
+                          className="ex-name"
+                          onClick={() => {
+                            rememberMainScroll(sessionKey, exercise.id);
+                            go(`/exercise/${exercise.exerciseId}?from=${encodeURIComponent(`/workout/session/${session.id}`)}`);
+                          }}
+                        >
+                          {exercise.name}
+                        </button>
+                        <p className="quiet ss-meta">Last time: {exercise.lastTime}. PR {exercise.prLine}</p>
+                      </div>
+                      {!finished && (
+                        <button
+                          type="button"
+                          className="pill"
+                          onClick={() => {
+                            rememberMainScroll(sessionKey, exercise.id);
+                            go(`/workout/session/${session.id}/swap/${exercise.id}`);
+                          }}
+                        >
+                          Swap
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+              {indexes.map((index) => {
+                const roundSets = members.flatMap((exercise) => {
+                  const set = exercise.sets.find((item) => item.setIndex === index);
+                  return set ? [{ exercise, set }] : [];
+                });
+                const currentRound = roundSets.some((item) => item.set.id === currentId && !item.set.loggedAt);
+                const anyPr = roundSets.some((item) => item.set.isPr || flash.includes(item.set.id));
+                return (
+                  <div key={index} className={currentRound ? "ss-round now" : "ss-round"}>
+                    <div className="set-label">
+                      {roundSets.every((item) => item.set.loggedAt) ? `Set ${index} done` : `Set ${index}`}
+                      {roundSets.some((item) => flash.includes(item.set.id)) ? <span className="pr fresh">New PR</span> : anyPr && roundSets.some((item) => item.set.isPr) ? <span className="pr">PR</span> : null}
+                    </div>
+                    {roundSets.map(({ exercise, set }) => {
+                      const row = drafts[set.id];
+                      const locked = Boolean(set.loggedAt) || finished;
+                      const select = () => {
+                        if (!locked) setCurrentId(set.id);
+                      };
+                      return (
+                        <div key={set.id} data-set={set.id} className="ss-move">
+                          <div className="ss-move-name">
+                            <span>{exercise.name}</span>
+                            {set.migrated ? <span className="migrated">Migrated</span> : null}
+                            {flash.includes(set.id) ? <span className="pr fresh">New PR</span> : set.isPr ? <span className="pr">PR</span> : null}
+                          </div>
+                          <div className="ss-controls">
+                            <MiniStepper
+                              label={`${exercise.name} weight`}
+                              setId={set.id}
+                              value={row?.weight ?? ""}
+                              display={weightValue(exercise, set, row)}
+                              disabled={locked || !row}
+                              decimal
+                              placeholder="—"
+                              onFocus={select}
+                              onCommit={(next) => {
+                                if (!row) return;
+                                select();
+                                changeDraft(exercise, set.id, { ...row, weight: next });
+                              }}
+                              onStep={(delta, currentValue) => {
+                                if (!row) return;
+                                select();
+                                changeDraft(exercise, set.id, { ...row, weight: stepNumber(currentValue, delta * 5, 5) });
+                              }}
+                            />
+                            <MiniStepper
+                              label={exercise.measure === "meters" ? `${exercise.name} meters` : `${exercise.name} reps`}
+                              setId={set.id}
+                              value={row?.reps ?? ""}
+                              display={repsValue(exercise, set, row)}
+                              disabled={locked || !row}
+                              suffix={exercise.measure === "meters" ? "m" : exercise.perSide ? "/side" : undefined}
+                              placeholder="—"
+                              onFocus={select}
+                              onCommit={(next) => {
+                                if (!row) return;
+                                select();
+                                changeDraft(exercise, set.id, { ...row, reps: next });
+                              }}
+                              onStep={(delta, currentValue) => {
+                                if (!row) return;
+                                select();
+                                const jump = exercise.measure === "meters" ? 5 : 1;
+                                changeDraft(exercise, set.id, { ...row, reps: stepNumber(currentValue, delta * jump, jump) });
+                              }}
+                            />
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                );
+              })}
+              {!finished && (
+                <div className="row-actions">
+                  <button
+                    type="button"
+                    onClick={() => mutate(`/api/sessions/${session.id}/rounds/remove`, "POST", members[0]?.id, { sessionExerciseId: members[0]?.id })}
+                  >
+                    Remove set
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => mutate(`/api/sessions/${session.id}/rounds/add`, "POST", members[0]?.id, { sessionExerciseId: members[0]?.id })}
+                  >
+                    Add set
+                  </button>
+                </div>
+              )}
+            </section>
+          );
+        }
+        const exercise = block.exercise;
+        return (
         <section className="card" key={exercise.id} data-scroll-anchor={exercise.id}>
           <div className="ex-head">
             <div>
@@ -534,8 +696,10 @@ export function SessionScreen({ sessionId }: { sessionId: string }) {
                 <button type="button" className="set-label" onClick={select}>
                   {set.loggedAt ? `Set ${set.setIndex} done` : `Set ${set.setIndex}`}
                   {flash.includes(set.id) ? <span className="pr fresh">New PR</span> : set.isPr ? <span className="pr">PR</span> : null}
+                  {set.migrated ? <span className="migrated">Migrated</span> : null}
                 </button>
                 <MiniStepper
+                  setId={set.id}
                   label={exercise.isCardio ? "minutes" : "weight"}
                   value={exercise.isCardio ? (row?.minutes ?? "") : (row?.weight ?? "")}
                   display={weightValue(exercise, set, row)}
@@ -561,6 +725,7 @@ export function SessionScreen({ sessionId }: { sessionId: string }) {
                 />
                 {!exercise.isCardio && (
                   <MiniStepper
+                    setId={set.id}
                     label={exercise.measure === "meters" ? "meters" : "reps"}
                     value={row?.reps ?? ""}
                     display={repsValue(exercise, set, row)}
@@ -611,7 +776,8 @@ export function SessionScreen({ sessionId }: { sessionId: string }) {
             </div>
           )}
         </section>
-      ))}
+        );
+      })}
 
       {!finished && (
         <button type="button" className="ghost" onClick={() => setAsk("discard")}>
@@ -682,6 +848,7 @@ export function SessionScreen({ sessionId }: { sessionId: string }) {
 
 function MiniStepper({
   label,
+  setId,
   value,
   display,
   disabled,
@@ -693,6 +860,7 @@ function MiniStepper({
   onStep,
 }: {
   label: string;
+  setId?: string;
   value: string;
   display: string;
   disabled?: boolean;
@@ -721,6 +889,7 @@ function MiniStepper({
       </button>
       <input
         aria-label={label}
+        data-set-id={setId}
         inputMode={decimal ? "decimal" : "numeric"}
         pattern="[0-9]*"
         enterKeyHint="done"
