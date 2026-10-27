@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 struct SessionView: View {
   @EnvironmentObject private var model: AppModel
@@ -6,6 +7,7 @@ struct SessionView: View {
   @State private var swapExercise: SessionExercise?
   @State private var confirmFinish = false
   @State private var confirmDiscard = false
+  @FocusState private var focusedField: SetField?
 
   var body: some View {
     ScrollViewReader { proxy in
@@ -164,6 +166,7 @@ struct SessionView: View {
       HStack(spacing: 8) {
           stepper(
             label: exercise.isCardio ? "minutes" : "weight",
+            field: exercise.isCardio ? .minutes(set.id) : .weight(set.id),
             text: Binding(
               get: { exercise.isCardio ? (model.drafts[set.id]?.minutes ?? "") : (model.drafts[set.id]?.weight ?? "") },
               set: { value in
@@ -186,6 +189,7 @@ struct SessionView: View {
           if !exercise.isCardio {
             stepper(
               label: exercise.measure == "meters" ? "meters" : "reps",
+              field: .reps(set.id),
               text: Binding(
                 get: { model.drafts[set.id]?.reps ?? "" },
                 set: { value in
@@ -208,10 +212,12 @@ struct SessionView: View {
     .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
   }
 
-  private func stepper(label: String, text: Binding<String>, minus: @escaping () -> Void, plus: @escaping () -> Void) -> some View {
+  private func stepper(label: String, field: SetField, text: Binding<String>, minus: @escaping () -> Void, plus: @escaping () -> Void) -> some View {
     HStack(spacing: 0) {
       Button("−", action: minus).frame(width: 36, height: 40)
       TextField(label, text: text)
+        .focused($focusedField, equals: field)
+        .accessibilityLabel(label)
         .keyboardType(.decimalPad)
         .multilineTextAlignment(.center)
         .font(.system(size: 16, weight: .regular))
@@ -261,11 +267,11 @@ struct SessionView: View {
             .font(.system(size: 11))
             .foregroundStyle(Theme.muted)
         }
-        if let current = current(session), let draft = model.drafts[current.set.id] {
-          PrimaryButton(
-            title: current.exercise.isCardio ? "Log cardio" : "Log set \(current.set.setIndex)",
-            enabled: canLog(current.exercise, draft)
-          ) { model.logCurrent() }
+        if let current = current(session), model.drafts[current.set.id] != nil {
+          LogSetButton(title: current.exercise.isCardio ? "Log cardio" : "Log set \(current.set.setIndex)") {
+            logTapped()
+          }
+          .frame(maxWidth: .infinity, minHeight: 44)
         } else {
           PrimaryButton(title: "Finish", enabled: !model.busy) { confirmFinish = true }
         }
@@ -288,9 +294,54 @@ struct SessionView: View {
     return session.currentSet()
   }
 
-  private func canLog(_ exercise: SessionExercise, _ draft: SetDraft) -> Bool {
-    if exercise.isCardio { return (Double(draft.minutes) ?? 0) > 0 }
-    return Double(draft.weight) != nil && (Double(draft.reps) ?? 0) > 0
+  private func logTapped() {
+    if let focusedField, let text = FocusedFieldReader.text {
+      model.applyFocusedNumber(setId: focusedField.setId, kind: focusedField.kind, text: text)
+    }
+    model.logCurrent()
+    focusedField = nil
+  }
+}
+
+private enum SetField: Hashable {
+  case weight(String)
+  case reps(String)
+  case minutes(String)
+
+  var setId: String {
+    switch self {
+    case .weight(let id), .reps(let id), .minutes(let id): return id
+    }
+  }
+
+  var kind: String {
+    switch self {
+    case .weight: return "weight"
+    case .reps: return "reps"
+    case .minutes: return "minutes"
+    }
+  }
+}
+
+private enum FocusedFieldReader {
+  static var text: String? {
+    let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+    for scene in scenes {
+      for window in scene.windows where window.isKeyWindow {
+        return (window.findFirstResponder() as? UITextField)?.text
+      }
+    }
+    return nil
+  }
+}
+
+private extension UIView {
+  func findFirstResponder() -> UIView? {
+    if isFirstResponder { return self }
+    for child in subviews {
+      if let found = child.findFirstResponder() { return found }
+    }
+    return nil
   }
 }
 

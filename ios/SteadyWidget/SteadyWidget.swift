@@ -16,15 +16,25 @@ struct SteadyProvider: TimelineProvider {
       completion(SteadyEntry(date: Date(), snapshot: .sample))
       return
     }
-    completion(SteadyEntry(date: Date(), snapshot: AppGroup.loadSnapshot()))
+    let now = Date()
+    completion(SteadyEntry(date: now, snapshot: AppGroup.loadSnapshot()?.forCivilDay(Boise.civil(now), at: now)))
   }
 
   func getTimeline(in context: Context, completion: @escaping (Timeline<SteadyEntry>) -> Void) {
     Task {
-      let snapshot = await WidgetTodayLoader.load()
-      let entry = SteadyEntry(date: Date(), snapshot: snapshot)
-      let next = Date().addingTimeInterval(30 * 60)
-      completion(Timeline(entries: [entry], policy: .after(next)))
+      let now = Date()
+      let loaded = await WidgetTodayLoader.load()
+      let today = Boise.civil(now)
+      let current = loaded?.forCivilDay(today, at: now)
+      let midnight = Boise.nextMidnight(after: now)
+      let rolled = current?.forCivilDay(Boise.civil(midnight), at: midnight)
+      let soon = now.addingTimeInterval(30 * 60)
+      let refresh = soon < midnight ? soon : midnight
+      let entries = [
+        SteadyEntry(date: now, snapshot: current),
+        SteadyEntry(date: midnight, snapshot: rolled),
+      ]
+      completion(Timeline(entries: entries, policy: .after(refresh)))
     }
   }
 }
@@ -33,7 +43,8 @@ enum WidgetTodayLoader {
   private static let root = "https://steady-re7n.onrender.com"
 
   static func load() async -> WidgetSnapshot? {
-    let cached = AppGroup.loadSnapshot()
+    let today = Boise.civil()
+    let cached = AppGroup.loadSnapshot()?.forCivilDay(today, at: Date())
     guard let token = AppGroup.token(), let url = URL(string: "\(root)/api/today") else { return cached }
     var request = URLRequest(url: url)
     request.httpMethod = "GET"

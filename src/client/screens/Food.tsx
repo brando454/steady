@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { api, compressImage, formatInt, formatQty, messageOf } from "../api";
+import { foodDateAfterRollover, msUntilNextCivilMidnight } from "../../shared/dayRollover";
 import { createFlightGuard } from "../../shared/flight";
 import { mealEntryIsBlank, usualActionLabel } from "../../shared/logic";
 import { civilDate, timeValue } from "../../shared/time";
@@ -40,7 +41,11 @@ export function FoodScreen({ search }: { search: URLSearchParams }) {
   const { go } = useNav();
   const toast = useToast();
   const editId = search.get("edit");
-  const [date, setDate] = useState(search.get("date") ?? "");
+  const initialDate = search.get("date") ?? "";
+  const [date, setDate] = useState(initialDate);
+  const following = useRef(initialDate === "" || initialDate === civilDate(new Date()));
+  const dateRef = useRef(date);
+  dateRef.current = date;
   const [time, setTime] = useState("");
   const [food, setFood] = useState<FoodDayDTO | null>(null);
   const [form, setForm] = useState<FormState>(emptyForm);
@@ -63,6 +68,47 @@ export function FoodScreen({ search }: { search: URLSearchParams }) {
   const suppressEdit = useRef(false);
   const draft = useRef({ note: "", photo: null as string | null, ai: null as string | null });
   draft.current = { note: form.note, photo: form.photo, ai: aiImage };
+
+  useEffect(() => {
+    let timer = 0;
+    const reloadCurrent = () => {
+      const viewed = dateRef.current;
+      const query = viewed ? `?date=${encodeURIComponent(viewed)}` : "";
+      api<FoodDayDTO>(`/api/meals${query}`)
+        .then((data) => {
+          if (dateRef.current === viewed) setFood(data);
+        })
+        .catch(() => undefined);
+    };
+    const wake = () => {
+      const next = foodDateAfterRollover(dateRef.current, following.current, new Date());
+      following.current = next.following;
+      if (next.rolled) {
+        setFood(null);
+        setTime(timeValue(new Date()));
+        setDate(next.date);
+        return;
+      }
+      reloadCurrent();
+    };
+    const arm = () => {
+      timer = window.setTimeout(() => {
+        wake();
+        arm();
+      }, msUntilNextCivilMidnight(new Date()));
+    };
+    const onVisible = () => {
+      if (document.visibilityState === "visible") wake();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    window.addEventListener("pageshow", onVisible);
+    arm();
+    return () => {
+      window.clearTimeout(timer);
+      document.removeEventListener("visibilitychange", onVisible);
+      window.removeEventListener("pageshow", onVisible);
+    };
+  }, []);
 
   useEffect(() => {
     let stop = false;
@@ -348,6 +394,7 @@ export function FoodScreen({ search }: { search: URLSearchParams }) {
     setError(null);
     const now = new Date();
     const today = civilDate(now);
+    following.current = true;
     setDate(today);
     setTime(timeValue(now));
     if (editId) go(`/food?date=${encodeURIComponent(today)}`, { replace: true, keepScroll: true });
@@ -365,6 +412,7 @@ export function FoodScreen({ search }: { search: URLSearchParams }) {
         setAiImage(snapshot.aiImage);
         setLoaded(snapshot.loaded);
         setDate(snapshot.date);
+        following.current = snapshot.date === "" || snapshot.date === civilDate(new Date());
         setTime(snapshot.time);
         setEstimateError(snapshot.estimateError);
         setError(snapshot.error);
@@ -394,7 +442,7 @@ export function FoodScreen({ search }: { search: URLSearchParams }) {
 
   return (
     <>
-      {food && (
+      {food ? (
         <section className="card overview">
           <Ring
             consumed={food.totals.calories}
@@ -408,6 +456,8 @@ export function FoodScreen({ search }: { search: URLSearchParams }) {
             <Macro name="Fat" value={food.totals.fat} target={food.targets.fat} unit="g" />
           </div>
         </section>
+      ) : (
+        <p className="quiet">Loading…</p>
       )}
       <h1>{editing ? "Edit meal" : "Log a meal"}</h1>
       <Banner text={error} />
@@ -562,7 +612,15 @@ export function FoodScreen({ search }: { search: URLSearchParams }) {
       <div className="when">
         <label className="field">
           <span>Date</span>
-          <input type="date" value={date} onChange={(event) => setDate(event.target.value)} />
+          <input
+            type="date"
+            value={date}
+            onChange={(event) => {
+              const value = event.target.value;
+              following.current = value === civilDate(new Date());
+              setDate(value);
+            }}
+          />
         </label>
         <label className="field">
           <span>Time</span>

@@ -1,7 +1,9 @@
 import { useEffect, useState } from "react";
 import { api, formatInt, formatQty, messageOf } from "../api";
-import type { SessionDTO, TodayDTO } from "../../shared/types";
+import { msUntilNextCivilMidnight } from "../../shared/dayRollover";
 import { shouldCelebrate } from "../../shared/logic";
+import { civilDate } from "../../shared/time";
+import type { SessionDTO, TodayDTO } from "../../shared/types";
 import { WorkoutGlucoseView } from "../WorkoutGlucose";
 import { Banner, Macro, Ring, useNav } from "../ui";
 
@@ -13,15 +15,38 @@ export function TodayScreen() {
 
   useEffect(() => {
     let stop = false;
-    api<TodayDTO>("/api/today")
-      .then((data) => {
-        if (!stop) setToday(data);
-      })
-      .catch((err) => {
-        if (!stop) setError(messageOf(err));
-      });
+    let timer = 0;
+    const load = () => {
+      const day = civilDate(new Date());
+      setToday((current) => (current && current.date === day ? current : null));
+      api<TodayDTO>("/api/today")
+        .then((data) => {
+          if (stop || data.date !== civilDate(new Date())) return;
+          setToday(data);
+          setError(null);
+        })
+        .catch((err) => {
+          if (!stop) setError(messageOf(err));
+        });
+    };
+    const arm = () => {
+      timer = window.setTimeout(() => {
+        load();
+        arm();
+      }, msUntilNextCivilMidnight(new Date()));
+    };
+    const onVisible = () => {
+      if (document.visibilityState === "visible") load();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    window.addEventListener("pageshow", onVisible);
+    arm();
+    load();
     return () => {
       stop = true;
+      window.clearTimeout(timer);
+      document.removeEventListener("visibilitychange", onVisible);
+      window.removeEventListener("pageshow", onVisible);
     };
   }, []);
 

@@ -22,6 +22,24 @@ struct WidgetSnapshot: Codable, Equatable {
     guard target > 0 else { return 0 }
     return min(1, max(0, eaten / target))
   }
+
+  /// Yesterday's snapshot must not keep showing as today. Targets stay; eaten totals reset.
+  func forCivilDay(_ day: String, at date: Date) -> WidgetSnapshot {
+    guard self.date != day else { return self }
+    return WidgetSnapshot(
+      date: day,
+      updatedAt: date,
+      caloriesEaten: 0,
+      caloriesTarget: caloriesTarget,
+      caloriesLeft: caloriesTarget,
+      proteinEaten: 0,
+      proteinTarget: proteinTarget,
+      carbsEaten: 0,
+      carbsTarget: carbsTarget,
+      fatEaten: 0,
+      fatTarget: fatTarget
+    )
+  }
 }
 
 enum AppGroup {

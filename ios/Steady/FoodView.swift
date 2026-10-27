@@ -35,6 +35,8 @@ struct FoodView: View {
   @State private var estimateGeneration = 0
   @State private var undoEntry: EntrySnapshot?
   @State private var undoTask: Task<Void, Never>?
+  @State private var followsToday = true
+  @State private var suppressDateLoad = false
 
   var body: some View {
     ScrollViewReader { proxy in
@@ -84,14 +86,30 @@ struct FoodView: View {
     }
     .onAppear {
       Task {
-        await model.loadFood(date: date.isEmpty ? nil : date)
-        if date.isEmpty { date = model.food?.date ?? "" }
-        if time.isEmpty { time = String((model.food?.nowTime ?? "12:00").prefix(5)) }
+        if date.isEmpty {
+          followsToday = true
+          model.setFoodFollowsToday(true)
+          await model.loadFood(date: model.civilToday)
+          if date.isEmpty { date = model.civilToday }
+          if time.isEmpty { time = Boise.timeValue() }
+        }
         seeded = true
       }
     }
+    .onChange(of: model.civilToday) { _, day in
+      guard followsToday, date != day else { return }
+      suppressDateLoad = true
+      date = day
+      time = Boise.timeValue()
+    }
     .onChange(of: date) { _, value in
+      if suppressDateLoad {
+        suppressDateLoad = false
+        return
+      }
       guard seeded, value.range(of: #"^\d{4}-\d{2}-\d{2}$"#, options: .regularExpression) != nil else { return }
+      followsToday = value == model.civilToday
+      model.setFoodFollowsToday(followsToday)
       Task { await model.loadFood(date: value) }
     }
     .fullScreenCover(isPresented: $showCamera) {

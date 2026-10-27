@@ -2,6 +2,7 @@ import BackgroundTasks
 import Foundation
 import Network
 import SwiftUI
+import UIKit
 import UserNotifications
 import WidgetKit
 
@@ -41,6 +42,7 @@ final class AppModel: ObservableObject {
   @Published var booting = true
   @Published var online = true
   @Published var tab: AppTab = .today
+  @Published var civilToday = Boise.civil()
   @Published var today: Today?
   @Published var week: WeekPlan?
   @Published var program: Program?
@@ -71,6 +73,10 @@ final class AppModel: ObservableObject {
   private var glucoseTask: Task<Void, Never>?
   private var patchTask: Task<Void, Never>?
   private var syncing = false
+  private var draftGeneration = 0
+  private var logInFlight = false
+  private var foodFollowsToday = true
+  private var midnightTimer: Timer?
 
   func prepare() {
     UNUserNotificationCenter.current().delegate = rest
@@ -95,12 +101,26 @@ final class AppModel: ObservableObject {
     self.monitor = monitor
     outbox = CacheStore.load([OutboxItem].self, name: "outbox.json") ?? []
     pending = outbox.count
-    today = CacheStore.load(Today.self, name: "today.json")
+    let day = Boise.civil()
+    civilToday = day
+    today = cachedToday(day)
     week = CacheStore.load(WeekPlan.self, name: "week.json")
     program = CacheStore.load(Program.self, name: "program.json")
-    food = CacheStore.load(FoodDay.self, name: "food.json")
+    food = cachedFood(day)
     weights = CacheStore.load(WeightChart.self, name: "weights.json")
+    NotificationCenter.default.addObserver(forName: UIApplication.significantTimeChangeNotification, object: nil, queue: .main) { [weak self] _ in
+      Task { @MainActor in await self?.rollDay(refetch: true) }
+    }
+    armMidnightTimer()
     Task { await bootstrap() }
+  }
+
+  func becameActive() async {
+    await rollDay(refetch: unlocked)
+  }
+
+  func setFoodFollowsToday(_ follows: Bool) {
+    foodFollowsToday = follows
   }
 
   func bootstrap() async {
@@ -172,10 +192,13 @@ final class AppModel: ObservableObject {
   }
 
   func refreshToday() async {
+    let day = Boise.civil()
+    if today?.date != day { today = cachedToday(day) }
     do {
       let next = try await api.today()
+      guard next.date == Boise.civil() else { return }
       today = next
-      CacheStore.save(next, name: "today.json")
+      CacheStore.save(next, name: "today-\(next.date).json")
       publishWidget(next)
       banner = nil
     } catch APIError.offline {
@@ -233,17 +256,46 @@ final class AppModel: ObservableObject {
   }
 
   func logCurrent() {
-    enqueue { await self.logCurrentNow() }
+    guard !logInFlight else { return }
+    logInFlight = true
+    draftGeneration += 1
+    patchTask?.cancel()
+    enqueue {
+      await self.logCurrentNow()
+      self.logInFlight = false
+    }
+  }
+
+  /// The focused weight or rep field can be ahead of the draft. Copy it in before logging.
+  func applyFocusedNumber(setId: String, kind: String, text: String) {
+    guard var draft = drafts[setId] else { return }
+    let trimmed = text.trimmingCharacters(in: .whitespaces)
+    if kind == "reps" || kind == "minutes" {
+      let digits = trimmed.filter(\.isNumber)
+      if kind == "reps" { draft.reps = digits } else { draft.minutes = digits }
+    } else {
+      var seenDot = false
+      draft.weight = trimmed.filter { char in
+        if char.isNumber { return true }
+        if char == "." && !seenDot { seenDot = true; return true }
+        return false
+      }
+    }
+    drafts[setId] = draft
+    draftGeneration += 1
+    patchTask?.cancel()
   }
 
   func changeDraft(setId: String, _ draft: SetDraft) {
     drafts[setId] = draft
     guard let pair = find(setId: setId), pair.set.loggedAt == nil else { return }
+    draftGeneration += 1
+    let generation = draftGeneration
     patchTask?.cancel()
     patchTask = Task {
       try? await Task.sleep(nanoseconds: 450_000_000)
-      if Task.isCancelled { return }
-      await self.patch(setId: setId)
+      if Task.isCancelled || generation != self.draftGeneration { return }
+      await self.patch(setId: setId, generation: generation)
     }
   }
 
@@ -251,24 +303,21 @@ final class AppModel: ObservableObject {
     guard var draft = drafts[setId] else { return }
     let next = max(0, (Double(draft.weight) ?? 0) + Double(delta) * 5)
     draft.weight = Format.qty(next)
-    drafts[setId] = draft
-    Task { await patch(setId: setId) }
+    changeDraft(setId: setId, draft)
   }
 
   func step(setId: String, reps delta: Int) {
     guard var draft = drafts[setId] else { return }
     let next = max(0, (Double(draft.reps) ?? 0) + Double(delta))
     draft.reps = Format.qty(next)
-    drafts[setId] = draft
-    Task { await patch(setId: setId) }
+    changeDraft(setId: setId, draft)
   }
 
   func step(setId: String, minutes delta: Int) {
     guard var draft = drafts[setId] else { return }
     let next = max(0, (Double(draft.minutes) ?? 0) + Double(delta))
     draft.minutes = Format.qty(next)
-    drafts[setId] = draft
-    Task { await patch(setId: setId) }
+    changeDraft(setId: setId, draft)
   }
 
   func addSet(exerciseId: String) { enqueue { await self.addSetNow(exerciseId) } }
@@ -292,11 +341,14 @@ final class AppModel: ObservableObject {
     restEnds = nil
   }
 
-  func loadFood(date: String?) async {
+  func loadFood(date requested: String?) async {
+    let day = requested?.isEmpty == false ? requested! : Boise.civil()
+    if food?.date != day { food = cachedFood(day) }
     do {
-      let next = try await api.meals(date: date)
+      let next = try await api.meals(date: day)
+      guard next.date == day else { return }
       food = next
-      CacheStore.save(next, name: "food.json")
+      CacheStore.save(next, name: "food-\(next.date).json")
     } catch APIError.offline {
       online = false
     } catch {
@@ -449,7 +501,7 @@ final class AppModel: ObservableObject {
   }
 
   private func logCurrentNow() async {
-    guard let session, let current = currentPair(), let draft = drafts[current.set.id] else { return }
+    guard let session, let current = currentPair(), current.set.loggedAt == nil, let draft = drafts[current.set.id] else { return }
     guard canLog(current.exercise, draft) else {
       banner = current.exercise.isCardio ? "Enter the minutes" : "Enter the weight and reps"
       return
@@ -459,6 +511,7 @@ final class AppModel: ObservableObject {
     if session.isLocal {
       recordLocal(kind: "log", exercise: current.exercise, set: current.set, draft: draft, createdSetId: nil, createdExerciseId: nil, swapId: nil, scope: nil, custom: nil)
       markLogged(setId: current.set.id, draft: draft, exercise: current.exercise)
+      didLogSet()
       beginRest(current.exercise, draft)
       return
     }
@@ -466,6 +519,7 @@ final class AppModel: ObservableObject {
       let next = try await api.logSet(current.set.id, body: body)
       notePrs(before: before, session: next)
       adopt(next, keepDrafts: true)
+      didLogSet()
       beginRest(current.exercise, draft)
       banner = nil
     } catch {
@@ -473,6 +527,7 @@ final class AppModel: ObservableObject {
         online = false
         queue(method: "POST", path: "/api/sets/\(current.set.id)/log", body: body)
         markLogged(setId: current.set.id, draft: draft, exercise: current.exercise)
+        didLogSet()
         beginRest(current.exercise, draft)
       } else if await recover(error) {
         await logCurrentNow()
@@ -480,7 +535,8 @@ final class AppModel: ObservableObject {
     }
   }
 
-  private func patch(setId: String) async {
+  private func patch(setId: String, generation: Int) async {
+    guard generation == draftGeneration else { return }
     guard let pair = find(setId: setId), pair.set.loggedAt == nil, let draft = drafts[setId], let session else { return }
     let body = setBody(pair.exercise, draft)
     if session.isLocal {
@@ -489,6 +545,7 @@ final class AppModel: ObservableObject {
     }
     do {
       let next = try await api.patchSet(setId, body: body)
+      guard generation == draftGeneration else { return }
       adopt(next, keepDrafts: true)
     } catch {
       if APIError.isOffline(error) {
@@ -1137,11 +1194,57 @@ final class AppModel: ObservableObject {
         session = next
       }
     }
-    if today?.suggestion?.glucose?.inProgress == true {
+    let day = Boise.civil()
+    if today?.date != day || today?.suggestion?.glucose?.inProgress == true {
       await refreshToday()
     }
-    if food?.glucoseDay != nil || food?.meals.contains(where: { $0.glucose?.inProgress == true }) == true {
-      await loadFood(date: food?.date)
+    let foodLive = food?.glucoseDay != nil || food?.meals.contains(where: { $0.glucose?.inProgress == true }) == true
+    if foodFollowsToday && food?.date != day {
+      await loadFood(date: day)
+    } else if foodLive {
+      await loadFood(date: foodFollowsToday ? day : food?.date)
+    }
+  }
+
+  private func didLogSet() {
+    UIImpactFeedbackGenerator(style: .light).impactOccurred()
+  }
+
+  private func cachedToday(_ date: String) -> Today? {
+    if let dated = CacheStore.load(Today.self, name: "today-\(date).json") { return dated }
+    if let legacy = CacheStore.load(Today.self, name: "today.json"), legacy.date == date { return legacy }
+    return nil
+  }
+
+  private func cachedFood(_ date: String) -> FoodDay? {
+    if let dated = CacheStore.load(FoodDay.self, name: "food-\(date).json") { return dated }
+    if let legacy = CacheStore.load(FoodDay.self, name: "food.json"), legacy.date == date { return legacy }
+    return nil
+  }
+
+  private func armMidnightTimer() {
+    midnightTimer?.invalidate()
+    let timer = Timer(fire: Boise.nextMidnight(), interval: 0, repeats: false) { [weak self] _ in
+      Task { @MainActor in await self?.rollDay(refetch: true) }
+    }
+    RunLoop.main.add(timer, forMode: .common)
+    midnightTimer = timer
+  }
+
+  private func rollDay(refetch: Bool) async {
+    let day = Boise.civil()
+    let changed = day != civilToday
+    civilToday = day
+    if changed {
+      if today?.date != day { today = cachedToday(day) }
+      if foodFollowsToday && food?.date != day { food = cachedFood(day) }
+    }
+    armMidnightTimer()
+    guard refetch, unlocked else { return }
+    await refreshToday()
+    await refreshWeek()
+    if foodFollowsToday {
+      await loadFood(date: day)
     }
   }
 

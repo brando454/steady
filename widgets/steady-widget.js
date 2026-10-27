@@ -297,7 +297,34 @@ function renderError(widget, message) {
 const widget = new ListWidget();
 widget.backgroundColor = CARD;
 widget.url = FOOD_URL;
-widget.refreshAfterDate = new Date(Date.now() + 15 * 60 * 1000);
+function civilToday() {
+  const now = new Date();
+  const month = String(now.getMonth() + 1).padStart(2, "0");
+  const day = String(now.getDate()).padStart(2, "0");
+  return `${now.getFullYear()}-${month}-${day}`;
+}
+
+function nextLocalMidnight() {
+  const next = new Date();
+  next.setHours(24, 0, 0, 0);
+  return next;
+}
+
+function asThisDay(data) {
+  if (!data || !data.date || data.date === civilToday()) return data;
+  return {
+    ...data,
+    date: civilToday(),
+    calories: { eaten: 0, target: data.calories.target, left: data.calories.target },
+    protein: { eaten: 0, target: data.protein.target },
+    carbs: { eaten: 0, target: data.carbs.target },
+    fat: { eaten: 0, target: data.fat.target },
+  };
+}
+
+const quarterHour = new Date(Date.now() + 15 * 60 * 1000);
+const midnight = nextLocalMidnight();
+widget.refreshAfterDate = quarterHour < midnight ? quarterHour : midnight;
 widget.spacing = 0;
 widget.setPadding(PAD, PAD, PAD, PAD);
 
@@ -313,8 +340,9 @@ if (!TOKEN || TOKEN === "PASTE_TOKEN") {
     if (status !== 200 || !data || data.calories == null || data.protein == null) {
       throw new Error("refresh failed");
     }
-    if (SMALL) renderSmall(widget, data);
-    else renderMedium(widget, data);
+    const today = asThisDay(data);
+    if (SMALL) renderSmall(widget, today);
+    else renderMedium(widget, today);
   } catch {
     renderError(widget, "Couldn't refresh today.");
   }
