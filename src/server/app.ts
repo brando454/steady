@@ -40,6 +40,10 @@ import {
   logRound,
   logSet,
   removeRound,
+  skipExercise,
+  skipSet,
+  unskipExercise,
+  unskipSet,
   saveFavorite,
   saveSettings,
   saveWeight,
@@ -212,6 +216,18 @@ export function createApp(passcode: string) {
   app.post("/api/session-exercises/:id/sets", asyncRoute(async (req, res) => res.json(await addSet(req.params.id))));
   app.patch("/api/sets/:id", asyncRoute(async (req, res) => res.json(await updatePlannedSet(req.params.id, req.body ?? {}))));
   app.post("/api/sets/:id/log", asyncRoute(async (req, res) => res.json(await logSet(req.params.id, req.body ?? {}))));
+  app.post("/api/sets/:id/skip", asyncRoute(async (req, res) => res.json(await skipSet(req.params.id))));
+  app.post("/api/sets/:id/unskip", asyncRoute(async (req, res) => res.json(await unskipSet(req.params.id))));
+  app.post("/api/session-exercises/:id/skip", asyncRoute(async (req, res) => {
+    const sessionId = typeof req.body?.sessionId === "string" ? req.body.sessionId : "";
+    if (!sessionId) throw new HttpError(400, "Workout not found");
+    res.json(await skipExercise(sessionId, req.params.id, req.body?.scope === "pair"));
+  }));
+  app.post("/api/session-exercises/:id/unskip", asyncRoute(async (req, res) => {
+    const sessionId = typeof req.body?.sessionId === "string" ? req.body.sessionId : "";
+    if (!sessionId) throw new HttpError(400, "Workout not found");
+    res.json(await unskipExercise(sessionId, req.params.id, req.body?.scope === "pair"));
+  }));
   app.post("/api/sessions/:id/rounds", asyncRoute(async (req, res) => res.json(await logRound(req.params.id, req.body ?? {}))));
   app.post("/api/sessions/:id/rounds/add", asyncRoute(async (req, res) => res.json(await addRound(req.params.id, req.body ?? {}))));
   app.post("/api/sessions/:id/rounds/remove", asyncRoute(async (req, res) => res.json(await removeRound(req.params.id, req.body ?? {}))));

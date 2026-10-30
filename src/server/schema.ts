@@ -81,7 +81,8 @@ CREATE TABLE IF NOT EXISTS session_exercises (
   is_cardio boolean NOT NULL DEFAULT false,
   cardio_min integer,
   superset_group text,
-  superset_order integer
+  superset_order integer,
+  skipped boolean NOT NULL DEFAULT false
 );
 
 CREATE TABLE IF NOT EXISTS sets (
@@ -96,7 +97,9 @@ CREATE TABLE IF NOT EXISTS sets (
   is_pr boolean NOT NULL DEFAULT false,
   pr_kind text,
   logged_at timestamptz,
-  migrated boolean NOT NULL DEFAULT false
+  migrated boolean NOT NULL DEFAULT false,
+  skipped boolean NOT NULL DEFAULT false,
+  skip_source text
 );
 
 CREATE TABLE IF NOT EXISTS meals (
@@ -145,6 +148,9 @@ ALTER TABLE program_exercises ADD COLUMN IF NOT EXISTS superset_order integer;
 ALTER TABLE session_exercises ADD COLUMN IF NOT EXISTS superset_group text;
 ALTER TABLE session_exercises ADD COLUMN IF NOT EXISTS superset_order integer;
 ALTER TABLE sets ADD COLUMN IF NOT EXISTS migrated boolean NOT NULL DEFAULT false;
+ALTER TABLE sets ADD COLUMN IF NOT EXISTS skipped boolean NOT NULL DEFAULT false;
+ALTER TABLE sets ADD COLUMN IF NOT EXISTS skip_source text;
+ALTER TABLE session_exercises ADD COLUMN IF NOT EXISTS skipped boolean NOT NULL DEFAULT false;
 
 CREATE TABLE IF NOT EXISTS nightscout_deletes (
   nightscout_id text PRIMARY KEY,

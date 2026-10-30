@@ -282,12 +282,14 @@ final class AppModel: ObservableObject {
       }
     }
     drafts[setId] = draft
+    pushLive()
     draftGeneration += 1
     patchTask?.cancel()
   }
 
   func changeDraft(setId: String, _ draft: SetDraft) {
     drafts[setId] = draft
+    pushLive()
     guard let pair = find(setId: setId), pair.set.loggedAt == nil else { return }
     draftGeneration += 1
     let generation = draftGeneration
@@ -337,9 +339,15 @@ final class AppModel: ObservableObject {
   }
 
   func skipRest() {
-    rest.stop()
+    rest.endCountdown()
     restEnds = nil
+    pushLive()
   }
+
+  func skipSet(id: String) { enqueue { await self.skipSetNow(id, skipped: true) } }
+  func unskipSet(id: String) { enqueue { await self.unskipSetNow(id) } }
+  func skipExercise(id: String, pair: Bool) { enqueue { await self.skipExerciseNow(id, pair: pair, skipped: true) } }
+  func unskipExercise(id: String, pair: Bool) { enqueue { await self.skipExerciseNow(id, pair: pair, skipped: false) } }
 
   func loadFood(date requested: String?) async {
     let day = requested?.isEmpty == false ? requested! : Boise.civil()
@@ -533,7 +541,9 @@ final class AppModel: ObservableObject {
         next = try await api.logSet(ready[0].1.id, body: setBody(ready[0].0, ready[0].2))
       }
       notePrs(before: before, session: next)
+      holdLive = true
       adopt(next, keepDrafts: true)
+      holdLive = false
       didLogSet()
       if !current.exercise.isCardio { beginRest(name: label, reps: reps) }
       banner = nil
@@ -705,8 +715,8 @@ final class AppModel: ObservableObject {
 
   private func finishNow() async {
     guard let session else { return }
-    let logged = session.exercises.contains { $0.sets.contains { $0.loggedAt != nil } }
-    if !logged {
+    let progressed = session.exercises.contains { $0.skipped == true || $0.sets.contains { $0.loggedAt != nil || $0.skipped == true } }
+    if !progressed {
       banner = "Log a set before finishing"
       return
     }
@@ -974,12 +984,126 @@ final class AppModel: ObservableObject {
 
   private func beginRest(name: String, reps: Double) {
     let seconds = RestClock.seconds(forReps: reps)
+    let planned = max(15, seconds)
+    restEnds = Date().addingTimeInterval(TimeInterval(planned))
+    restName = name
+    restPlanned = planned
+    let copy = liveCopy()
     Task {
-      let started = await rest.start(name: name, seconds: seconds)
+      let started = await rest.start(name: name, seconds: seconds, detail: copy?.detail ?? "", shortName: copy?.shortName ?? name)
       restEnds = started.ends
       restName = name
       restPlanned = started.planned
       notificationsOn = started.allowed
+    }
+  }
+
+  private func liveCopy() -> LiveLine.Copy? {
+    guard let session else { return nil }
+    return LiveLine.current(session: session, drafts: drafts)
+  }
+
+  private func skipSetNow(_ id: String, skipped: Bool) async {
+    guard let session, let pair = find(setId: id), pair.set.loggedAt == nil else { return }
+    if skipped {
+      rest.endCountdown()
+      restEnds = nil
+    }
+    if session.isLocal {
+      recordLocal(kind: skipped ? "skip" : "unskip", exercise: pair.exercise, set: pair.set, draft: drafts[id], createdSetId: nil, createdExerciseId: nil, swapId: nil, scope: "set", custom: nil)
+      markSkipped(setId: id, skipped: skipped)
+      return
+    }
+    do {
+      let next = skipped ? try await api.skipSet(id) : try await api.unskipSet(id)
+      adopt(next, keepDrafts: true)
+    } catch {
+      if APIError.isOffline(error) {
+        online = false
+        queue(method: "POST", path: "/api/sets/\(id)/\(skipped ? "skip" : "unskip")", body: nil)
+        markSkipped(setId: id, skipped: skipped)
+      } else if await recover(error) {
+        await skipSetNow(id, skipped: skipped)
+      }
+    }
+  }
+
+  private func unskipSetNow(_ id: String) async {
+    await skipSetNow(id, skipped: false)
+  }
+
+  private func skipExerciseNow(_ id: String, pair: Bool, skipped: Bool) async {
+    guard let session, let exercise = session.exercises.first(where: { $0.id == id }) else { return }
+    if skipped {
+      rest.endCountdown()
+      restEnds = nil
+    }
+    let scope = pair ? "pair" : "movement"
+    if session.isLocal {
+      recordLocal(kind: skipped ? "skip" : "unskip", exercise: exercise, set: nil, draft: nil, createdSetId: nil, createdExerciseId: nil, swapId: nil, scope: scope, custom: nil)
+      markExerciseSkipped(id, skipped: skipped, pair: pair)
+      return
+    }
+    do {
+      let next = skipped ? try await api.skipExercise(id, sessionId: session.id, scope: scope) : try await api.unskipExercise(id, sessionId: session.id, scope: scope)
+      adopt(next, keepDrafts: true)
+    } catch {
+      if APIError.isOffline(error) {
+        online = false
+        queue(method: "POST", path: "/api/session-exercises/\(id)/\(skipped ? "skip" : "unskip")", body: ["sessionId": AnyEncodable(session.id), "scope": AnyEncodable(scope)])
+        markExerciseSkipped(id, skipped: skipped, pair: pair)
+      } else if await recover(error) {
+        await skipExerciseNow(id, pair: pair, skipped: skipped)
+      }
+    }
+  }
+
+  private func markSkipped(setId: String, skipped: Bool) {
+    guard var session else { return }
+    for ei in session.exercises.indices {
+      for si in session.exercises[ei].sets.indices where session.exercises[ei].sets[si].id == setId {
+        session.exercises[ei].sets[si].skipped = skipped
+      }
+    }
+    if session.isLocal { replaceLocalSession(session) }
+    adopt(session, keepDrafts: true)
+  }
+
+  private func markExerciseSkipped(_ exerciseId: String, skipped: Bool, pair: Bool) {
+    guard var session, let exercise = session.exercises.first(where: { $0.id == exerciseId }) else { return }
+    let ids = Set(pair ? supersetMembers(exercise, session).map(\.id) : [exerciseId])
+    for ei in session.exercises.indices where ids.contains(session.exercises[ei].id) {
+      session.exercises[ei].skipped = skipped
+      for si in session.exercises[ei].sets.indices where session.exercises[ei].sets[si].loggedAt == nil {
+        if skipped {
+          if session.exercises[ei].sets[si].skipped != true {
+            session.exercises[ei].sets[si].skipped = true
+          }
+        } else {
+          session.exercises[ei].sets[si].skipped = false
+        }
+      }
+    }
+    if session.isLocal { replaceLocalSession(session) }
+    adopt(session, keepDrafts: true)
+  }
+
+  private func pushLive() {
+    guard let session else { return }
+    if session.completedAt != nil {
+      rest.stop()
+      restEnds = nil
+      return
+    }
+    guard let copy = liveCopy() else {
+      if restEnds == nil { rest.stop() }
+      return
+    }
+    let resting = restEnds.map { $0 > Date() } ?? false
+    let headline = resting ? (restName.isEmpty ? "Rest" : restName) : copy.headline
+    let detail = resting ? copy.detail : ""
+    Task {
+      await rest.show(headline: headline, detail: detail, shortName: copy.shortName, ends: resting ? restEnds : nil, planned: resting ? restPlanned : 1)
     }
   }
 
@@ -1055,9 +1179,19 @@ final class AppModel: ObservableObject {
         drafts[set.id] = SetDraft(set: set, exercise: exercise)
       }
     }
-    let currentStillOpen = session.exercises.flatMap(\.sets).first { $0.id == currentSetId }?.loggedAt == nil
+    let currentExercise = session.exercises.first { $0.sets.contains { $0.id == currentSetId } }
+    let currentSet = currentExercise?.sets.first { $0.id == currentSetId }
+    let currentStillOpen = currentSet?.loggedAt == nil && currentSet?.skipped != true && currentExercise?.skipped != true
     if !currentStillOpen { currentSetId = session.currentSet()?.set.id }
+    if session.completedAt != nil {
+      rest.stop()
+      restEnds = nil
+    } else if !holdLive {
+      pushLive()
+    }
   }
+
+  private var holdLive = false
 
   private func markLogged(setId: String, draft: SetDraft, exercise: SessionExercise) {
     guard var session else { return }
@@ -1082,7 +1216,9 @@ final class AppModel: ObservableObject {
       }
     }
     if session.isLocal { replaceLocalSession(session) }
+    holdLive = true
     adopt(session, keepDrafts: true)
+    holdLive = false
   }
 
   private func notePrs(before: Set<String>, session: WorkoutSession) {
@@ -1097,7 +1233,7 @@ final class AppModel: ObservableObject {
 
   private func currentPair() -> (exercise: SessionExercise, set: WorkoutSet)? {
     guard let session else { return nil }
-    if let id = currentSetId, let pair = find(setId: id), pair.set.loggedAt == nil { return pair }
+    if let id = currentSetId, let pair = find(setId: id), pair.set.loggedAt == nil, pair.set.skipped != true, pair.exercise.skipped != true { return pair }
     return session.currentSet()
   }
 
@@ -1111,7 +1247,7 @@ final class AppModel: ObservableObject {
     let members = supersetMembers(exercise, session)
     if members.count < 2 { return [(exercise, set)] }
     let pairs = members.compactMap { member -> (SessionExercise, WorkoutSet)? in
-      guard let mate = member.sets.first(where: { $0.setIndex == set.setIndex && $0.loggedAt == nil }) else { return nil }
+      guard member.skipped != true, let mate = member.sets.first(where: { $0.setIndex == set.setIndex && $0.loggedAt == nil && $0.skipped != true }) else { return nil }
       return (member, mate)
     }
     return pairs.isEmpty ? [(exercise, set)] : pairs

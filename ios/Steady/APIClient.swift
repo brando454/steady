@@ -74,6 +74,14 @@ final class APIClient {
     try await send("POST", "/api/sessions/\(enc(sessionId))/rounds/remove", body: ["sessionExerciseId": AnyEncodable(sessionExerciseId)])
   }
   func deleteSet(_ id: String) async throws -> WorkoutSession { try await send("DELETE", "/api/sets/\(enc(id))") }
+  func skipSet(_ id: String) async throws -> WorkoutSession { try await send("POST", "/api/sets/\(enc(id))/skip") }
+  func unskipSet(_ id: String) async throws -> WorkoutSession { try await send("POST", "/api/sets/\(enc(id))/unskip") }
+  func skipExercise(_ id: String, sessionId: String, scope: String) async throws -> WorkoutSession {
+    try await send("POST", "/api/session-exercises/\(enc(id))/skip", body: ["sessionId": AnyEncodable(sessionId), "scope": AnyEncodable(scope)])
+  }
+  func unskipExercise(_ id: String, sessionId: String, scope: String) async throws -> WorkoutSession {
+    try await send("POST", "/api/session-exercises/\(enc(id))/unskip", body: ["sessionId": AnyEncodable(sessionId), "scope": AnyEncodable(scope)])
+  }
   func history() async throws -> [HistoryItem] { try await send("GET", "/api/history") }
   func exerciseHistory(_ id: String) async throws -> ExerciseHistory { try await send("GET", "/api/exercises/\(enc(id))/history") }
   func meals(date: String?) async throws -> FoodDay {

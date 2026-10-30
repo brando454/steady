@@ -211,39 +211,62 @@ struct RestLiveActivity: Widget {
   var body: some WidgetConfiguration {
     ActivityConfiguration(for: RestAttributes.self) { context in
       VStack(alignment: .leading, spacing: 4) {
-        Text(context.attributes.exerciseName)
+        Text(context.state.headline)
           .font(.system(size: 15, weight: .semibold))
           .foregroundStyle(Theme.text)
-        Text(timerInterval: RestClock.range(endsAt: context.state.endsAt, plannedSeconds: context.attributes.plannedSeconds), countsDown: true)
-          .font(.system(size: 22, weight: .semibold))
-          .monospacedDigit()
-          .foregroundStyle(Theme.accent)
-        Text("Rest")
-          .font(.system(size: 12))
-          .foregroundStyle(Theme.muted)
+          .lineLimit(2)
+        if let ends = context.state.endsAt {
+          Text(timerInterval: RestClock.range(endsAt: ends, plannedSeconds: context.state.plannedSeconds), countsDown: true)
+            .font(.system(size: 22, weight: .light))
+            .monospacedDigit()
+            .foregroundStyle(Theme.accent)
+        }
+        if !context.state.detail.isEmpty {
+          Text(context.state.detail)
+            .font(.system(size: 13, weight: .regular))
+            .foregroundStyle(Theme.muted)
+            .lineLimit(2)
+        }
       }
       .padding(14)
       .activityBackgroundTint(Theme.card)
     } dynamicIsland: { context in
       DynamicIsland {
         DynamicIslandExpandedRegion(.leading) {
-          Text(context.attributes.exerciseName)
+          Text(context.state.headline)
             .font(.system(size: 13, weight: .semibold))
-            .lineLimit(1)
+            .lineLimit(2)
         }
         DynamicIslandExpandedRegion(.trailing) {
-          Text(timerInterval: RestClock.range(endsAt: context.state.endsAt, plannedSeconds: context.attributes.plannedSeconds), countsDown: true)
-            .monospacedDigit()
-            .font(.system(size: 15, weight: .semibold))
+          if let ends = context.state.endsAt {
+            Text(timerInterval: RestClock.range(endsAt: ends, plannedSeconds: context.state.plannedSeconds), countsDown: true)
+              .monospacedDigit()
+              .font(.system(size: 15, weight: .light))
+          }
+        }
+        DynamicIslandExpandedRegion(.bottom) {
+          if !context.state.detail.isEmpty {
+            Text(context.state.detail)
+              .font(.system(size: 12, weight: .regular))
+              .foregroundStyle(Theme.muted)
+              .lineLimit(2)
+          }
         }
       } compactLeading: {
-        Image(systemName: "timer")
+        Text(context.state.shortName)
+          .font(.system(size: 12, weight: .semibold))
+          .lineLimit(1)
       } compactTrailing: {
-        Text(timerInterval: RestClock.range(endsAt: context.state.endsAt, plannedSeconds: context.attributes.plannedSeconds), countsDown: true)
-          .monospacedDigit()
-          .frame(width: 44)
+        if let ends = context.state.endsAt {
+          Text(timerInterval: RestClock.range(endsAt: ends, plannedSeconds: context.state.plannedSeconds), countsDown: true)
+            .monospacedDigit()
+            .font(.system(size: 12, weight: .regular))
+            .frame(width: 44)
+        }
       } minimal: {
-        Image(systemName: "timer")
+        Text(context.state.shortName)
+          .font(.system(size: 12, weight: .semibold))
+          .lineLimit(1)
       }
     }
   }

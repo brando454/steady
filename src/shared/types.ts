@@ -40,6 +40,7 @@ export type SetDTO = {
   loggedAt: string | null;
   label: string;
   migrated: boolean;
+  skipped: boolean;
 };
 
 export type SessionExerciseDTO = {
@@ -62,6 +63,7 @@ export type SessionExerciseDTO = {
   prLine: string;
   supersetGroup: string | null;
   supersetOrder: number | null;
+  skipped: boolean;
   swaps: { id: string; name: string }[];
   sets: SetDTO[];
 };

@@ -90,6 +90,21 @@ enum SyncEngine {
     case "log":
       guard let setId = action.setId, let serverSet = local.idMap[setId] else { return session }
       return try await ignoringConflict { try await api.logSet(serverSet, body: body(action)) }
+    case "skip", "unskip":
+      guard let serverSession = local.serverSessionId else { return session }
+      if action.scope == "set" {
+        guard let setId = action.setId, let serverSet = local.idMap[setId] else { return session }
+        if action.kind == "skip" {
+          return try await ignoringConflict { try await api.skipSet(serverSet) }
+        }
+        return try await ignoringConflict { try await api.unskipSet(serverSet) }
+      }
+      guard let serverExercise = local.idMap[action.exerciseId] else { return session }
+      let scope = action.scope ?? "movement"
+      if action.kind == "skip" {
+        return try await ignoringConflict { try await api.skipExercise(serverExercise, sessionId: serverSession, scope: scope) }
+      }
+      return try await ignoringConflict { try await api.unskipExercise(serverExercise, sessionId: serverSession, scope: scope) }
     case "add":
       guard let serverExercise = local.idMap[action.exerciseId] else { return session }
       let before = Set(session.exercises.flatMap { $0.sets.map(\.id) })
