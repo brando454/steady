@@ -523,11 +523,14 @@ type SetRow = {
   pr_kind: string | null;
   logged_at: Date | null;
   migrated?: boolean;
+  skipped?: boolean;
+  skip_source?: string | null;
 };
 type SxRow = Omit<SlotRow, "id" | "day_id"> & {
   id: string;
   session_id: string;
   program_exercise_id: number | null;
+  skipped?: boolean;
 };
 
 function setLabel(set: SetRow, exercise: { is_cardio: boolean; measure: string; per_side: boolean }): string {
@@ -607,7 +610,7 @@ export async function getSession(id: string): Promise<SessionDTO | null> {
     pool,
     `SELECT sx.id, sx.session_id, sx.program_exercise_id, sx.exercise_id, sx.name, sx.sort_order, sx.sets,
             sx.reps_label, sx.rep_count, sx.measure, sx.per_side, sx.notes, sx.is_cardio, sx.cardio_min,
-            sx.superset_group, sx.superset_order,
+            sx.superset_group, sx.superset_order, sx.skipped,
             e.pattern_key, e.pattern_label, e.muscles
      FROM session_exercises sx
      JOIN exercises e ON e.id = sx.exercise_id
@@ -669,6 +672,7 @@ export async function getSession(id: string): Promise<SessionDTO | null> {
         loggedAt: stamp(set.logged_at),
         label: setLabel(set, exercise),
         migrated: Boolean(set.migrated),
+        skipped: Boolean(set.skipped),
       }));
     return {
       id: exercise.id,
@@ -690,6 +694,7 @@ export async function getSession(id: string): Promise<SessionDTO | null> {
       prLine: copy.prLine,
       supersetGroup: exercise.superset_group,
       supersetOrder: exercise.superset_order,
+      skipped: Boolean(exercise.skipped),
       swaps: exercise.is_cardio ? [] : swapsFor(exercise.exercise_id, exercise.pattern_key, explicit, catalog),
       sets,
     };
@@ -819,9 +824,12 @@ async function openSet(client: Queryable, setId: string) {
     is_cardio: boolean;
     completed_at: Date | null;
     session_exercise_id: string;
+    skipped: boolean;
+    exercise_skipped: boolean;
   }>(
     client,
-    `SELECT s.id, s.logged_at, s.session_exercise_id, sx.session_id, sx.exercise_id, sx.is_cardio, sess.completed_at
+    `SELECT s.id, s.logged_at, s.session_exercise_id, s.skipped, sx.session_id, sx.exercise_id, sx.is_cardio,
+            sx.skipped AS exercise_skipped, sess.completed_at
      FROM sets s
      JOIN session_exercises sx ON sx.id = s.session_exercise_id
      JOIN sessions sess ON sess.id = sx.session_id
@@ -859,6 +867,7 @@ export async function logSet(setId: string, body: Record<string, unknown>): Prom
   const sessionId = await tx(async (client) => {
     const set = await openSet(client, setId);
     if (set.logged_at) throw new HttpError(409, "That set is already logged");
+    if (set.skipped || set.exercise_skipped) throw new HttpError(409, "That set is skipped");
     if (set.is_cardio) {
       const minutes = readNumber(body.minutes, "Minutes", 300);
       if (minutes <= 0) throw new HttpError(400, "Enter the minutes");
@@ -897,6 +906,7 @@ export async function logRound(sessionId: string, body: Record<string, unknown>)
       const set = await openSet(client, setId);
       if (set.session_id !== sessionId) throw new HttpError(404, "Set not found");
       if (set.logged_at) throw new HttpError(409, "That set is already logged");
+      if (set.skipped || set.exercise_skipped) throw new HttpError(409, "That set is skipped");
       const meta = await rows<{ superset_group: string | null; set_index: number }>(
         client,
         `SELECT sx.superset_group, s.set_index
@@ -1217,6 +1227,94 @@ export async function swapExercise(sessionId: string, body: Record<string, unkno
   return requireSession(sessionId);
 }
 
+async function exerciseScope(client: Queryable, sessionId: string, sxId: string, pair: boolean) {
+  const found = await rows<SxRow & { completed_at: Date | null }>(
+    client,
+    `SELECT sx.*, e.pattern_key, e.pattern_label, e.muscles, sess.completed_at
+     FROM session_exercises sx
+     JOIN exercises e ON e.id = sx.exercise_id
+     JOIN sessions sess ON sess.id = sx.session_id
+     WHERE sx.id = $1 AND sx.session_id = $2`,
+    [sxId, sessionId],
+  );
+  const exercise = found[0];
+  if (!exercise) throw new HttpError(404, "Exercise not found");
+  if (exercise.completed_at) throw new HttpError(400, "This workout is already finished");
+  if (!pair || !exercise.superset_group) return [exercise];
+  const members = await rows<SxRow & { completed_at: Date | null }>(
+    client,
+    `SELECT sx.*, e.pattern_key, e.pattern_label, e.muscles, sess.completed_at
+     FROM session_exercises sx
+     JOIN exercises e ON e.id = sx.exercise_id
+     JOIN sessions sess ON sess.id = sx.session_id
+     WHERE sx.session_id = $1 AND sx.superset_group = $2
+     ORDER BY sx.superset_order, sx.sort_order`,
+    [sessionId, exercise.superset_group],
+  );
+  return members.length ? members : [exercise];
+}
+
+export async function skipSet(setId: string): Promise<SessionDTO> {
+  const sessionId = await tx(async (client) => {
+    const set = await openSet(client, setId);
+    if (set.logged_at) throw new HttpError(409, "That set is already logged");
+    await client.query(
+      "UPDATE sets SET skipped = true, skip_source = 'set', is_pr = false, pr_kind = NULL WHERE id = $1",
+      [setId],
+    );
+    return set.session_id;
+  });
+  return requireSession(sessionId);
+}
+
+export async function unskipSet(setId: string): Promise<SessionDTO> {
+  const sessionId = await tx(async (client) => {
+    const set = await openSet(client, setId);
+    if (set.logged_at) throw new HttpError(409, "That set is already logged");
+    await client.query("UPDATE sets SET skipped = false, skip_source = NULL WHERE id = $1", [setId]);
+    await client.query(
+      `UPDATE session_exercises SET skipped = false
+       WHERE id = $1 AND skipped
+         AND NOT EXISTS (
+           SELECT 1 FROM sets WHERE session_exercise_id = $1 AND skipped AND skip_source = 'exercise'
+         )`,
+      [set.session_exercise_id],
+    );
+    return set.session_id;
+  });
+  return requireSession(sessionId);
+}
+
+export async function skipExercise(sessionId: string, sxId: string, pair: boolean): Promise<SessionDTO> {
+  await tx(async (client) => {
+    const members = await exerciseScope(client, sessionId, sxId, pair);
+    for (const member of members) {
+      await client.query("UPDATE session_exercises SET skipped = true WHERE id = $1", [member.id]);
+      await client.query(
+        `UPDATE sets SET skipped = true, skip_source = 'exercise', is_pr = false, pr_kind = NULL
+         WHERE session_exercise_id = $1 AND logged_at IS NULL AND (skip_source IS NULL OR skip_source = 'exercise')`,
+        [member.id],
+      );
+    }
+  });
+  return requireSession(sessionId);
+}
+
+export async function unskipExercise(sessionId: string, sxId: string, pair: boolean): Promise<SessionDTO> {
+  await tx(async (client) => {
+    const members = await exerciseScope(client, sessionId, sxId, pair);
+    for (const member of members) {
+      await client.query("UPDATE session_exercises SET skipped = false WHERE id = $1", [member.id]);
+      await client.query(
+        `UPDATE sets SET skipped = false, skip_source = NULL
+         WHERE session_exercise_id = $1 AND skip_source = 'exercise' AND logged_at IS NULL`,
+        [member.id],
+      );
+    }
+  });
+  return requireSession(sessionId);
+}
+
 export async function finishSession(id: string): Promise<SessionDTO> {
   await tx(async (client) => {
     const logged = await rows<{ n: number }>(
@@ -1226,7 +1324,16 @@ export async function finishSession(id: string): Promise<SessionDTO> {
        WHERE sx.session_id = $1 AND s.logged_at IS NOT NULL`,
       [id],
     );
-    if (Number(logged[0]?.n ?? 0) < 1) throw new HttpError(400, "Log a set before finishing");
+    const touched = await rows<{ n: number }>(
+      client,
+      `SELECT COUNT(*)::int AS n FROM sets s
+       JOIN session_exercises sx ON sx.id = s.session_exercise_id
+       WHERE sx.session_id = $1 AND (s.logged_at IS NOT NULL OR s.skipped OR sx.skipped)`,
+      [id],
+    );
+    if (Number(logged[0]?.n ?? 0) < 1 && Number(touched[0]?.n ?? 0) < 1) {
+      throw new HttpError(400, "Log a set before finishing");
+    }
     const updated = await client.query("UPDATE sessions SET completed_at = now() WHERE id = $1 AND completed_at IS NULL", [id]);
     if (updated.rowCount === 0) {
       const exists = await rows<{ id: string }>(client, "SELECT id FROM sessions WHERE id = $1", [id]);
@@ -1649,9 +1756,10 @@ export async function coachReview(from: string, to: string) {
         sort_order: number;
         superset_group: string | null;
         superset_order: number | null;
+        skipped: boolean;
       }>(
         pool,
-        `SELECT id, session_id, exercise_id, name, measure, per_side, is_cardio, sort_order, superset_group, superset_order
+        `SELECT id, session_id, exercise_id, name, measure, per_side, is_cardio, sort_order, superset_group, superset_order, skipped
          FROM session_exercises WHERE session_id = ANY($1::uuid[]) ORDER BY sort_order, superset_order`,
         [sessionIds],
       )
@@ -1666,21 +1774,22 @@ export async function coachReview(from: string, to: string) {
         is_pr: boolean;
         pr_kind: string | null;
         note: string | null;
-        logged_at: Date;
+        logged_at: Date | null;
         set_index: number;
         migrated: boolean;
+        skipped: boolean;
       }>(
         pool,
-        "SELECT session_exercise_id, weight_lb, reps, duration_sec, is_pr, pr_kind, note, logged_at, set_index, migrated FROM sets WHERE session_exercise_id = ANY($1::uuid[]) AND logged_at IS NOT NULL ORDER BY set_index",
+        "SELECT session_exercise_id, weight_lb, reps, duration_sec, is_pr, pr_kind, note, logged_at, set_index, migrated, skipped FROM sets WHERE session_exercise_id = ANY($1::uuid[]) AND (logged_at IS NOT NULL OR skipped) ORDER BY set_index",
         [sxIds],
       )
     : [];
   const prs = sets
-    .filter((set) => set.is_pr)
+    .filter((set) => set.is_pr && set.logged_at)
     .map((set) => {
       const exercise = exercises.find((item) => item.id === set.session_exercise_id);
       return {
-        date: civilDate(set.logged_at),
+        date: civilDate(set.logged_at as Date),
         exercise: exercise?.name ?? "",
         weightLb: num(set.weight_lb),
         reps: num(set.reps),
@@ -1719,6 +1828,7 @@ export async function coachReview(from: string, to: string) {
               isCardio: exercise.is_cardio,
               supersetGroup: exercise.superset_group,
               supersetOrder: exercise.superset_order,
+              skipped: Boolean(exercise.skipped),
               sets: sets
                 .filter((set) => set.session_exercise_id === exercise.id)
                 .map((set) => ({
@@ -1729,6 +1839,8 @@ export async function coachReview(from: string, to: string) {
                   prKind: set.pr_kind,
                   note: set.note,
                   migrated: Boolean(set.migrated),
+                  skipped: Boolean(set.skipped),
+                  loggedAt: stamp(set.logged_at),
                 })),
             })),
         })),

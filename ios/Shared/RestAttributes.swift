@@ -3,7 +3,11 @@ import Foundation
 
 struct RestAttributes: ActivityAttributes {
   struct ContentState: Codable, Hashable {
-    var endsAt: Date
+    var endsAt: Date?
+    var headline: String
+    var detail: String
+    var shortName: String
+    var plannedSeconds: Int
   }
 
   var exerciseName: String

@@ -13,13 +13,20 @@ final class RestController: NSObject, UNUserNotificationCenterDelegate {
   /// player and the foreground notification cannot both play.
   private var cued = false
 
-  func start(name: String, seconds: Int) async -> (ends: Date, planned: Int, allowed: Bool) {
+  private var headline = ""
+  private var detail = ""
+  private var shortName = ""
+
+  func start(name: String, seconds: Int, detail next: String, shortName nameShort: String) async -> (ends: Date, planned: Int, allowed: Bool) {
     let planned = max(15, seconds)
     let ends = Date().addingTimeInterval(TimeInterval(planned))
+    headline = name
+    detail = next
+    shortName = nameShort
     let allowed = await ensurePermission()
     schedule(name: name, at: ends)
     armForegroundCue(at: ends)
-    await upsert(name: name, ends: ends, planned: planned)
+    await show(ends: ends, planned: planned)
     return (ends, planned, allowed)
   }
 
@@ -28,19 +35,36 @@ final class RestController: NSObject, UNUserNotificationCenterDelegate {
     var next = base.addingTimeInterval(TimeInterval(seconds))
     if next < Date().addingTimeInterval(1) { next = Date().addingTimeInterval(1) }
     let span = max(planned, Int(next.timeIntervalSinceNow.rounded(.up)))
-    schedule(name: name, at: next)
+    if !name.isEmpty { headline = name }
+    schedule(name: headline, at: next)
     armForegroundCue(at: next)
-    await upsert(name: name, ends: next, planned: span)
+    await show(ends: next, planned: span)
     return (next, span)
   }
 
-  func stop() {
+  /// Updates the Live Activity without touching the rest notification.
+  func show(headline: String, detail: String, shortName: String, ends: Date?, planned: Int) async {
+    self.headline = headline
+    self.detail = detail
+    self.shortName = shortName
+    await show(ends: ends, planned: max(planned, 1))
+  }
+
+  /// Stops the ding and countdown, and leaves the activity on the next set.
+  func endCountdown() {
     cueTask?.cancel()
     cueTask = nil
     cued = false
     player?.stop()
     player = nil
     UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: ["steady.rest"])
+  }
+
+  func stop() {
+    endCountdown()
+    headline = ""
+    detail = ""
+    shortName = ""
     Task {
       for activity in Activity<RestAttributes>.activities {
         await activity.end(nil, dismissalPolicy: .immediate)
@@ -130,14 +154,21 @@ final class RestController: NSObject, UNUserNotificationCenterDelegate {
     player?.play()
   }
 
-  private func upsert(name: String, ends: Date, planned: Int) async {
-    let state = RestAttributes.ContentState(endsAt: ends)
-    let content = ActivityContent(state: state, staleDate: ends.addingTimeInterval(30))
+  private func show(ends: Date?, planned: Int) async {
+    let state = RestAttributes.ContentState(
+      endsAt: ends,
+      headline: headline,
+      detail: detail,
+      shortName: shortName,
+      plannedSeconds: max(planned, 1)
+    )
+    let content = ActivityContent(state: state, staleDate: ends?.addingTimeInterval(30))
     if let current = Activity<RestAttributes>.activities.first {
       await current.update(content)
       return
     }
-    let attributes = RestAttributes(exerciseName: name, plannedSeconds: planned)
+    guard !headline.isEmpty else { return }
+    let attributes = RestAttributes(exerciseName: shortName.isEmpty ? headline : shortName, plannedSeconds: max(planned, 1))
     _ = try? Activity.request(attributes: attributes, content: content, pushType: nil)
   }
 }

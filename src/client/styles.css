@@ -721,6 +721,50 @@ textarea { min-height: 88px; resize: vertical; }
   font-weight: 600;
   color: var(--muted);
 }
+.quiet-hit {
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 400;
+  min-height: 32px;
+  padding: 0 4px;
+}
+.mini-menu { position: relative; }
+.mini-menu summary {
+  list-style: none;
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 16px;
+  font-weight: 400;
+  letter-spacing: 1px;
+  min-width: 32px;
+  min-height: 32px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.mini-menu summary::-webkit-details-marker { display: none; }
+.mini-menu[open] summary { color: var(--text); }
+.mini-menu button {
+  position: absolute;
+  right: 0;
+  top: 32px;
+  z-index: 2;
+  border: 1px solid var(--line);
+  background: var(--card);
+  color: var(--text);
+  border-radius: 10px;
+  font-size: 13px;
+  font-weight: 400;
+  padding: 8px 12px;
+  min-height: 36px;
+  white-space: nowrap;
+}
+.struck { text-decoration: line-through; }
+.set-row.skipped, .ss-move.skipped, .skipped-card { opacity: 0.72; }
+.skipped-row { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+.ex-actions { display: flex; align-items: center; gap: 8px; }
 .set-label {
   border: 0;
   background: transparent;

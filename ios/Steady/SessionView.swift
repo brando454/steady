@@ -103,9 +103,21 @@ struct SessionView: View {
   }
 
   private func supersetCard(_ session: WorkoutSession, _ title: String, _ members: [SessionExercise]) -> some View {
+    if members.allSatisfy({ $0.skipped == true }), let first = members.first {
+      return AnyView(skippedRow(session, title: title) { model.unskipExercise(id: first.id, pair: true) })
+    }
     let indexes = Array(Set(members.flatMap { $0.sets.map(\.setIndex) })).sorted()
-    return Card {
-      Text(title).font(.system(size: 16, weight: .semibold)).foregroundStyle(Theme.text)
+    guard let lead = members.first else { return AnyView(EmptyView()) }
+    return AnyView(Card {
+      HStack {
+        Text(title).font(.system(size: 16, weight: .semibold)).foregroundStyle(Theme.text)
+        Spacer()
+        if session.completedAt == nil {
+          Button("Skip pair") { model.skipExercise(id: lead.id, pair: true) }
+            .font(.system(size: 13, weight: .regular))
+            .foregroundStyle(Theme.muted)
+        }
+      }
       ForEach(members) { exercise in
         VStack(alignment: .leading, spacing: 4) {
           HStack(alignment: .top) {
@@ -117,16 +129,25 @@ struct SessionView: View {
             }
             .buttonStyle(.plain)
             Spacer()
-            if session.completedAt == nil {
-              Button("Swap") {
-                model.remember(key: session.id, anchor: exercise.id)
-                swapExercise = exercise
+            if session.completedAt == nil && exercise.skipped != true {
+              HStack(spacing: 12) {
+                Button("Skip") { model.skipExercise(id: exercise.id, pair: false) }
+                  .font(.system(size: 13, weight: .regular))
+                  .foregroundStyle(Theme.muted)
+                Button("Swap") {
+                  model.remember(key: session.id, anchor: exercise.id)
+                  swapExercise = exercise
+                }
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(Theme.accent)
               }
-              .font(.system(size: 13, weight: .semibold))
-              .foregroundStyle(Theme.accent)
+            } else if session.completedAt == nil && exercise.skipped == true {
+              Button("Undo") { model.unskipExercise(id: exercise.id, pair: false) }
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(Theme.accent)
             }
           }
-          Text("Last time: \(exercise.lastTime). PR \(exercise.prLine)")
+          Text(exercise.skipped == true ? "Skipped" : "Last time: \(exercise.lastTime). PR \(exercise.prLine)")
             .font(.system(size: 12, weight: .regular))
             .foregroundStyle(Theme.muted)
         }
@@ -150,19 +171,40 @@ struct SessionView: View {
             }
           }
           ForEach(round.map { RoundMove(exercise: $0.0, set: $0.1) }) { item in
-            VStack(alignment: .leading, spacing: 6) {
-              HStack(spacing: 6) {
-                Text(item.exercise.name).font(.system(size: 14, weight: .semibold)).foregroundStyle(Theme.text)
-                if item.set.migrated == true {
-                  Text("Migrated").font(.system(size: 11, weight: .regular)).foregroundStyle(Theme.muted)
-                }
-                if model.freshPr.contains(item.set.id) {
-                  Text("New PR").font(.system(size: 11, weight: .semibold)).foregroundStyle(Theme.ok)
-                } else if item.set.isPr {
-                  Text("PR").font(.system(size: 11, weight: .semibold)).foregroundStyle(Theme.ok)
+            if item.exercise.skipped == true || item.set.skipped == true {
+              HStack {
+                Text(item.exercise.name)
+                  .font(.system(size: 14, weight: .regular))
+                  .strikethrough()
+                  .foregroundStyle(Theme.muted)
+                Text("Skipped").font(.system(size: 12, weight: .regular)).foregroundStyle(Theme.muted)
+                Spacer()
+                if session.completedAt == nil && item.exercise.skipped != true {
+                  Button("Undo") { model.unskipSet(id: item.set.id) }
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(Theme.accent)
                 }
               }
-              movementSteppers(session, item.exercise, item.set)
+            } else {
+              VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 6) {
+                  Text(item.exercise.name).font(.system(size: 14, weight: .semibold)).foregroundStyle(Theme.text)
+                  if item.set.migrated == true {
+                    Text("Migrated").font(.system(size: 11, weight: .regular)).foregroundStyle(Theme.muted)
+                  }
+                  if model.freshPr.contains(item.set.id) {
+                    Text("New PR").font(.system(size: 11, weight: .semibold)).foregroundStyle(Theme.ok)
+                  } else if item.set.isPr {
+                    Text("PR").font(.system(size: 11, weight: .semibold)).foregroundStyle(Theme.ok)
+                  }
+                }
+                movementSteppers(session, item.exercise, item.set)
+              }
+              .contextMenu {
+                if session.completedAt == nil && item.set.loggedAt == nil {
+                  Button("Skip") { model.skipSet(id: item.set.id) }
+                }
+              }
             }
           }
         }
@@ -179,7 +221,7 @@ struct SessionView: View {
         .font(.system(size: 13, weight: .semibold))
         .foregroundStyle(Theme.accent)
       }
-    }
+    })
   }
 
   @ViewBuilder private func movementSteppers(_ session: WorkoutSession, _ exercise: SessionExercise, _ set: WorkoutSet) -> some View {
@@ -221,7 +263,10 @@ struct SessionView: View {
   }
 
   private func exerciseCard(_ session: WorkoutSession, _ exercise: SessionExercise) -> some View {
-    Card {
+    if exercise.skipped == true {
+      return AnyView(skippedRow(session, title: exercise.name) { model.unskipExercise(id: exercise.id, pair: false) })
+    }
+    return AnyView(Card {
       HStack(alignment: .top) {
         VStack(alignment: .leading, spacing: 4) {
           Button {
@@ -236,13 +281,20 @@ struct SessionView: View {
             .foregroundStyle(Theme.muted)
         }
         Spacer()
-        if session.completedAt == nil && !exercise.isCardio {
-          Button("Swap") {
-            model.remember(key: session.id, anchor: exercise.id)
-            swapExercise = exercise
+        if session.completedAt == nil {
+          HStack(spacing: 12) {
+            Button("Skip") { model.skipExercise(id: exercise.id, pair: false) }
+              .font(.system(size: 13, weight: .regular))
+              .foregroundStyle(Theme.muted)
+            if !exercise.isCardio {
+              Button("Swap") {
+                model.remember(key: session.id, anchor: exercise.id)
+                swapExercise = exercise
+              }
+              .font(.system(size: 13, weight: .semibold))
+              .foregroundStyle(Theme.accent)
+            }
           }
-          .font(.system(size: 13, weight: .semibold))
-          .foregroundStyle(Theme.accent)
         }
       }
       if let notes = exercise.notes, !notes.isEmpty {
@@ -260,21 +312,42 @@ struct SessionView: View {
         .font(.system(size: 13, weight: .semibold))
         .foregroundStyle(Theme.accent)
       }
+    })
+  }
+
+  private func skippedRow(_ session: WorkoutSession, title: String, undo: @escaping () -> Void) -> some View {
+    Card {
+      HStack {
+        VStack(alignment: .leading, spacing: 4) {
+          Text(title).font(.system(size: 15, weight: .regular)).strikethrough().foregroundStyle(Theme.muted)
+          Text("Skipped").font(.system(size: 13, weight: .regular)).foregroundStyle(Theme.muted)
+        }
+        Spacer()
+        if session.completedAt == nil {
+          Button("Undo", action: undo)
+            .font(.system(size: 13, weight: .semibold))
+            .foregroundStyle(Theme.accent)
+        }
+      }
     }
   }
 
   private func setRow(_ session: WorkoutSession, _ exercise: SessionExercise, _ set: WorkoutSet) -> some View {
-    let locked = set.loggedAt != nil || session.completedAt != nil
-    let current = model.currentSetId == set.id && set.loggedAt == nil
+    let locked = set.loggedAt != nil || session.completedAt != nil || set.skipped == true
+    let current = model.currentSetId == set.id && set.loggedAt == nil && set.skipped != true
     return VStack(alignment: .leading, spacing: 8) {
       HStack {
         Button {
           if !locked { model.currentSetId = set.id }
         } label: {
           HStack(spacing: 8) {
-            Text(set.loggedAt == nil ? "Set \(set.setIndex)" : "Set \(set.setIndex) done")
+            Text(set.skipped == true ? "Set \(set.setIndex)" : (set.loggedAt == nil ? "Set \(set.setIndex)" : "Set \(set.setIndex) done"))
               .font(.system(size: 13, weight: current ? .semibold : .regular))
-              .foregroundStyle(Theme.text)
+              .strikethrough(set.skipped == true)
+              .foregroundStyle(set.skipped == true ? Theme.muted : Theme.text)
+            if set.skipped == true {
+              Text("Skipped").font(.system(size: 12, weight: .regular)).foregroundStyle(Theme.muted)
+            }
             if model.freshPr.contains(set.id) {
               Text("New PR").font(.system(size: 11, weight: .semibold)).foregroundStyle(Theme.ok)
             } else if set.isPr {
@@ -330,11 +403,21 @@ struct SessionView: View {
           }
       }
       .disabled(locked)
-      .opacity(locked ? 0.72 : 1)
+      .opacity(set.skipped == true ? 0.55 : (locked ? 0.72 : 1))
+      if set.skipped == true && session.completedAt == nil {
+        Button("Undo") { model.unskipSet(id: set.id) }
+          .font(.system(size: 13, weight: .semibold))
+          .foregroundStyle(Theme.accent)
+      }
     }
     .padding(10)
     .background(current ? Theme.accentSoft : Color.clear)
     .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+    .contextMenu {
+      if session.completedAt == nil && set.loggedAt == nil && set.skipped != true {
+        Button("Skip") { model.skipSet(id: set.id) }
+      }
+    }
   }
 
   private func stepper(label: String, field: SetField, text: Binding<String>, minus: @escaping () -> Void, plus: @escaping () -> Void) -> some View {
@@ -413,7 +496,7 @@ struct SessionView: View {
     if let id = model.currentSetId,
        let exercise = session.exercises.first(where: { $0.sets.contains { $0.id == id } }),
        let set = exercise.sets.first(where: { $0.id == id }),
-       set.loggedAt == nil {
+       set.loggedAt == nil, set.skipped != true, exercise.skipped != true {
       return (exercise, set)
     }
     return session.currentSet()

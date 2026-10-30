@@ -4,6 +4,7 @@ import { api, messageOf } from "../api";
 import type { GlucoseDTO, SessionDTO, SessionExerciseDTO, SetDTO } from "../../shared/types";
 import { commitFocusedSetDraft } from "../../shared/logic";
 import { exerciseBlocks, restSecondsForRound } from "../../shared/superset";
+import { setIsOpen } from "../../shared/live";
 import { alignToTopOfMain, beginMainScrollHold, reassertMainScroll, rememberMainScroll, restoreArmed, revealCurrentSet, shouldRevealCurrentSet, useRestoreMainScroll } from "../scroll";
 import { WorkoutGlucoseView } from "../WorkoutGlucose";
 import { Back, Banner, Confirm, TrendArrow, useNav, useNow } from "../ui";
@@ -70,7 +71,7 @@ function commitInt(raw: string): string {
 
 function firstUnlogged(session: SessionDTO): string | null {
   for (const exercise of session.exercises) {
-    const set = exercise.sets.find((item) => !item.loggedAt);
+    const set = exercise.sets.find((item) => setIsOpen(exercise, item));
     if (set) return set.id;
   }
   return null;
@@ -237,13 +238,14 @@ export function SessionScreen({ sessionId }: { sessionId: string }) {
       }
       return merged;
     });
-    if (prefer && findSet(next, prefer) && !findSet(next, prefer)?.set.loggedAt) {
-      setCurrentId(prefer);
+    const preferred = prefer ? findSet(next, prefer) : null;
+    if (preferred && setIsOpen(preferred.exercise, preferred.set)) {
+      setCurrentId(preferred.set.id);
       return;
     }
     setCurrentId((current) => {
       const found = findSet(next, current);
-      if (found && !found.set.loggedAt) return current;
+      if (found && setIsOpen(found.exercise, found.set)) return current;
       return firstUnlogged(next);
     });
   }
@@ -280,7 +282,7 @@ export function SessionScreen({ sessionId }: { sessionId: string }) {
           .sort((a, b) => (a.supersetOrder ?? 0) - (b.supersetOrder ?? 0) || a.sortOrder - b.sortOrder)
       : [current.exercise];
     const pending = members.flatMap((exercise) => {
-      const set = exercise.sets.find((item) => item.setIndex === current.set.setIndex && !item.loggedAt);
+      const set = exercise.sets.find((item) => item.setIndex === current.set.setIndex && setIsOpen(exercise, item));
       if (!set) return [];
       const base = drafts[set.id];
       if (!base) return [];
@@ -353,6 +355,7 @@ export function SessionScreen({ sessionId }: { sessionId: string }) {
   }
 
   async function mutate(path: string, method: string, prefer?: string | null, body?: unknown) {
+    beginMainScrollHold();
     setBusy(true);
     setError(null);
     try {
@@ -365,6 +368,24 @@ export function SessionScreen({ sessionId }: { sessionId: string }) {
       setBusy(false);
       reassertMainScroll();
     }
+  }
+
+  function skipSetRow(setId: string) {
+    void mutate(`/api/sets/${setId}/skip`, "POST");
+  }
+
+  function unskipSetRow(setId: string) {
+    void mutate(`/api/sets/${setId}/unskip`, "POST");
+  }
+
+  function skipExerciseRow(exerciseId: string, scope: "movement" | "pair") {
+    if (!session) return;
+    void mutate(`/api/session-exercises/${exerciseId}/skip`, "POST", null, { sessionId: session.id, scope });
+  }
+
+  function unskipExerciseRow(exerciseId: string, scope: "movement" | "pair") {
+    if (!session) return;
+    void mutate(`/api/session-exercises/${exerciseId}/unskip`, "POST", null, { sessionId: session.id, scope });
   }
 
   async function finish() {
@@ -519,10 +540,34 @@ export function SessionScreen({ sessionId }: { sessionId: string }) {
       {exerciseBlocks(session.exercises).map((block) => {
         if (block.kind === "superset") {
           const members = block.exercises;
+          if (members.every((exercise) => exercise.skipped)) {
+            return (
+              <section className="card skipped-card" key={block.group} data-scroll-anchor={members[0]?.id}>
+                <div className="skipped-row">
+                  <div>
+                    <div className="ex-name struck">{block.title}</div>
+                    <p className="quiet">Skipped</p>
+                  </div>
+                  {!finished && (
+                    <button type="button" className="quiet-hit" onClick={() => unskipExerciseRow(members[0].id, "pair")}>
+                      Undo
+                    </button>
+                  )}
+                </div>
+              </section>
+            );
+          }
           const indexes = [...new Set(members.flatMap((exercise) => exercise.sets.map((set) => set.setIndex)))].sort((a, b) => a - b);
           return (
             <section className="card superset-card" key={block.group} data-scroll-anchor={members[0]?.id}>
-              <h2 className="ex-name ss-title">{block.title}</h2>
+              <div className="ex-head">
+                <h2 className="ex-name ss-title">{block.title}</h2>
+                {!finished && (
+                  <button type="button" className="quiet-hit" onClick={() => skipExerciseRow(members[0].id, "pair")}>
+                    Skip pair
+                  </button>
+                )}
+              </div>
               <div className="ss-identities">
                 {members.map((exercise) => (
                   <div key={exercise.id} className="ss-identity" data-scroll-anchor={exercise.id}>
@@ -540,16 +585,26 @@ export function SessionScreen({ sessionId }: { sessionId: string }) {
                         </button>
                         <p className="quiet ss-meta">Last time: {exercise.lastTime}. PR {exercise.prLine}</p>
                       </div>
-                      {!finished && (
-                        <button
-                          type="button"
-                          className="pill"
-                          onClick={() => {
-                            rememberMainScroll(sessionKey, exercise.id);
-                            go(`/workout/session/${session.id}/swap/${exercise.id}`);
-                          }}
-                        >
-                          Swap
+                      {!finished && !exercise.skipped && (
+                        <div className="ex-actions">
+                          <button type="button" className="quiet-hit" onClick={() => skipExerciseRow(exercise.id, "movement")}>
+                            Skip
+                          </button>
+                          <button
+                            type="button"
+                            className="pill"
+                            onClick={() => {
+                              rememberMainScroll(sessionKey, exercise.id);
+                              go(`/workout/session/${session.id}/swap/${exercise.id}`);
+                            }}
+                          >
+                            Swap
+                          </button>
+                        </div>
+                      )}
+                      {!finished && exercise.skipped && (
+                        <button type="button" className="quiet-hit" onClick={() => unskipExerciseRow(exercise.id, "movement")}>
+                          Undo
                         </button>
                       )}
                     </div>
@@ -570,6 +625,19 @@ export function SessionScreen({ sessionId }: { sessionId: string }) {
                       {roundSets.some((item) => flash.includes(item.set.id)) ? <span className="pr fresh">New PR</span> : anyPr && roundSets.some((item) => item.set.isPr) ? <span className="pr">PR</span> : null}
                     </div>
                     {roundSets.map(({ exercise, set }) => {
+                      if (exercise.skipped || set.skipped) {
+                        return (
+                          <div key={set.id} className="ss-move skipped">
+                            <div className="ss-move-name">
+                              <span className="struck">{exercise.name}</span>
+                              <span className="quiet">Skipped</span>
+                            </div>
+                            {!finished && !exercise.skipped && (
+                              <button type="button" className="quiet-hit" onClick={() => unskipSetRow(set.id)}>Undo</button>
+                            )}
+                          </div>
+                        );
+                      }
                       const row = drafts[set.id];
                       const locked = Boolean(set.loggedAt) || finished;
                       const select = () => {
@@ -581,6 +649,12 @@ export function SessionScreen({ sessionId }: { sessionId: string }) {
                             <span>{exercise.name}</span>
                             {set.migrated ? <span className="migrated">Migrated</span> : null}
                             {flash.includes(set.id) ? <span className="pr fresh">New PR</span> : set.isPr ? <span className="pr">PR</span> : null}
+                            {!finished && !locked && (
+                              <details className="mini-menu">
+                                <summary aria-label={`Options for ${exercise.name} set ${set.setIndex}`}>···</summary>
+                                <button type="button" onClick={() => skipSetRow(set.id)}>Skip</button>
+                              </details>
+                            )}
                           </div>
                           <div className="ss-controls">
                             <MiniStepper
@@ -651,6 +725,23 @@ export function SessionScreen({ sessionId }: { sessionId: string }) {
           );
         }
         const exercise = block.exercise;
+        if (exercise.skipped) {
+          return (
+            <section className="card skipped-card" key={exercise.id} data-scroll-anchor={exercise.id}>
+              <div className="skipped-row">
+                <div>
+                  <div className="ex-name struck">{exercise.name}</div>
+                  <p className="quiet">Skipped</p>
+                </div>
+                {!finished && (
+                  <button type="button" className="quiet-hit" onClick={() => unskipExerciseRow(exercise.id, "movement")}>
+                    Undo
+                  </button>
+                )}
+              </div>
+            </section>
+          );
+        }
         return (
         <section className="card" key={exercise.id} data-scroll-anchor={exercise.id}>
           <div className="ex-head">
@@ -671,21 +762,39 @@ export function SessionScreen({ sessionId }: { sessionId: string }) {
                   : `Last time: ${exercise.lastTime}. PR ${exercise.prLine}`}
               </p>
             </div>
-            {!finished && !exercise.isCardio && (
-              <button
-                type="button"
-                className="pill"
-                onClick={() => {
-                  rememberMainScroll(sessionKey, exercise.id);
-                  go(`/workout/session/${session.id}/swap/${exercise.id}`);
-                }}
-              >
-                Swap
-              </button>
+            {!finished && (
+              <div className="ex-actions">
+                <button type="button" className="quiet-hit" onClick={() => skipExerciseRow(exercise.id, "movement")}>
+                  Skip
+                </button>
+                {!exercise.isCardio && (
+                  <button
+                    type="button"
+                    className="pill"
+                    onClick={() => {
+                      rememberMainScroll(sessionKey, exercise.id);
+                      go(`/workout/session/${session.id}/swap/${exercise.id}`);
+                    }}
+                  >
+                    Swap
+                  </button>
+                )}
+              </div>
             )}
           </div>
           {exercise.notes && <p className="quiet">{exercise.notes}</p>}
           {exercise.sets.map((set) => {
+            if (set.skipped) {
+              return (
+                <div key={set.id} className="set-row skipped">
+                  <span className="set-label struck">Set {set.setIndex}</span>
+                  <span className="quiet">Skipped</span>
+                  {!finished && (
+                    <button type="button" className="quiet-hit" onClick={() => unskipSetRow(set.id)}>Undo</button>
+                  )}
+                </div>
+              );
+            }
             const row = drafts[set.id];
             const locked = Boolean(set.loggedAt) || finished;
             const select = () => {
@@ -698,6 +807,12 @@ export function SessionScreen({ sessionId }: { sessionId: string }) {
                   {flash.includes(set.id) ? <span className="pr fresh">New PR</span> : set.isPr ? <span className="pr">PR</span> : null}
                   {set.migrated ? <span className="migrated">Migrated</span> : null}
                 </button>
+                {!finished && !locked && (
+                  <details className="mini-menu">
+                    <summary aria-label={`Options for set ${set.setIndex}`}>···</summary>
+                    <button type="button" onClick={() => skipSetRow(set.id)}>Skip</button>
+                  </details>
+                )}
                 <MiniStepper
                   setId={set.id}
                   label={exercise.isCardio ? "minutes" : "weight"}

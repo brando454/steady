@@ -17,6 +17,7 @@ struct WorkoutSet: Codable, Identifiable, Hashable {
   var loggedAt: String?
   var label: String
   var migrated: Bool? = nil
+  var skipped: Bool? = nil
 }
 
 struct SessionExercise: Codable, Identifiable, Hashable {
@@ -39,6 +40,7 @@ struct SessionExercise: Codable, Identifiable, Hashable {
   var prLine: String
   var supersetGroup: String? = nil
   var supersetOrder: Int? = nil
+  var skipped: Bool? = nil
   var swaps: [NamedSwap]
   var sets: [WorkoutSet]
 }
@@ -57,8 +59,8 @@ struct WorkoutSession: Codable, Identifiable, Hashable {
   var isLocal: Bool { id.hasPrefix("local-") }
 
   func currentSet() -> (exercise: SessionExercise, set: WorkoutSet)? {
-    for exercise in exercises {
-      if let set = exercise.sets.first(where: { $0.loggedAt == nil }) {
+    for exercise in exercises where exercise.skipped != true {
+      if let set = exercise.sets.first(where: { $0.loggedAt == nil && $0.skipped != true }) {
         return (exercise, set)
       }
     }
