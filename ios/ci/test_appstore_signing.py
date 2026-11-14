@@ -64,6 +64,7 @@ class SigningTests(unittest.TestCase):
         self.assertFalse(consider(bundle_id="com.brando454.steady.widget"))
         self.assertFalse(consider(certificate_ids={"OTHER"}))
         self.assertFalse(consider(groups=[]))
+        self.assertTrue(consider(groups=[], require_group=False))
 
     def test_latest_profile_wins(self) -> None:
         early = ProfileChoice("old", "2026-12-01T00:00:00Z", "", "1", "com.brando454.steady")

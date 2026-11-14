@@ -98,6 +98,7 @@ def consider_profile(
     wanted_certs: set[str],
     groups: list[str],
     now: datetime,
+    require_group: bool = True,
 ) -> bool:
     if profile_type != "IOS_APP_STORE" or state != "ACTIVE":
         return False
@@ -111,7 +112,7 @@ def consider_profile(
         return False
     if not certificate_ids.intersection(wanted_certs):
         return False
-    return APP_GROUP in groups
+    return (not require_group) or APP_GROUP in groups
 
 
 def select_profile(choices: list[ProfileChoice]) -> ProfileChoice | None:
@@ -262,19 +263,25 @@ def matching_certificate_ids(token: str, ders: list[bytes]) -> list[str]:
     return found
 
 
-def _bundle_map(included: list[dict]) -> dict[str, str]:
-    return {
-        item["id"]: (item.get("attributes") or {}).get("identifier", "")
-        for item in included
-        if item.get("type") == "bundleIds"
-    }
+def _profile_groups(content: str) -> tuple[dict, list[str]]:
+    if not content:
+        return {}, []
+    try:
+        decoded = decode_profile(content)
+    except (subprocess.CalledProcessError, ValueError, plistlib.InvalidFileException):
+        return {}, []
+    groups = (decoded.get("Entitlements") or {}).get("com.apple.security.application-groups") or []
+    return decoded, [str(item) for item in groups]
 
 
 def existing_profile(token: str, bundle_id: str, cert_ids: set[str], now: datetime) -> ProfileChoice | None:
-    choices: list[ProfileChoice] = []
-    for page in _pages(token, "/v1/profiles?filter[profileType]=IOS_APP_STORE&include=bundleId,certificates&limit=200"):
-        bundles = _bundle_map(page["included"])
+    bundle = _bundle_resource(token, bundle_id)
+    grouped: list[ProfileChoice] = []
+    plain: list[ProfileChoice] = []
+    seen = 0
+    for page in _pages(token, "/v1/profiles?filter[profileType]=IOS_APP_STORE&include=certificates&limit=200"):
         for profile in page["data"]:
+            seen += 1
             attributes = profile.get("attributes") or {}
             relationships = profile.get("relationships") or {}
             bundle_ref = ((relationships.get("bundleId") or {}).get("data") or {}).get("id", "")
@@ -284,33 +291,36 @@ def existing_profile(token: str, bundle_id: str, cert_ids: set[str], now: dateti
                 if isinstance(item, dict) and item.get("id")
             }
             content = attributes.get("profileContent") or ""
-            try:
-                decoded = decode_profile(content) if content else {}
-            except (subprocess.CalledProcessError, ValueError, plistlib.InvalidFileException):
-                continue
-            groups = list((decoded.get("Entitlements") or {}).get("com.apple.security.application-groups") or [])
+            decoded, groups = _profile_groups(content)
             if not consider_profile(
                 profile_type=attributes.get("profileType", ""),
                 state=attributes.get("profileState", ""),
                 expiration=attributes.get("expirationDate", ""),
-                bundle_id=bundles.get(bundle_ref, ""),
-                wanted_bundle=bundle_id,
+                bundle_id=bundle_ref,
+                wanted_bundle=bundle["id"],
                 certificate_ids=linked,
                 wanted_certs=cert_ids,
                 groups=groups,
                 now=now,
+                require_group=False,
             ):
                 continue
-            choices.append(
-                ProfileChoice(
-                    name=attributes.get("name") or decoded.get("Name") or "",
-                    expiration=attributes.get("expirationDate", ""),
-                    content_b64=content,
-                    uuid=str(decoded.get("UUID") or ""),
-                    bundle_id=bundle_id,
-                )
+            choice = ProfileChoice(
+                name=attributes.get("name") or decoded.get("Name") or "",
+                expiration=attributes.get("expirationDate", ""),
+                content_b64=content,
+                uuid=str(decoded.get("UUID") or ""),
+                bundle_id=bundle_id,
             )
-    return select_profile(choices)
+            if APP_GROUP in groups:
+                grouped.append(choice)
+            else:
+                plain.append(choice)
+    print(
+        f"{bundle_id}: {seen} App Store profiles, {len(grouped) + len(plain)} tied to the distribution certificate",
+        flush=True,
+    )
+    return select_profile(grouped) or select_profile(plain)
 
 
 def _bundle_resource(token: str, bundle_id: str) -> dict:
@@ -322,7 +332,7 @@ def _bundle_resource(token: str, bundle_id: str) -> dict:
 
 
 def _ensure_app_group(token: str, bundle: dict) -> None:
-    capabilities = _api(token, "GET", f"/v1/bundleIds/{bundle['id']}/bundleIdCapabilities?limit=50")
+    capabilities = _api(token, "GET", f"/v1/bundleIds/{bundle['id']}/bundleIdCapabilities")
     for item in capabilities.get("data", []):
         if (item.get("attributes") or {}).get("capabilityType") == "APP_GROUPS":
             return
@@ -333,7 +343,10 @@ def _ensure_app_group(token: str, bundle: dict) -> None:
         {
             "data": {
                 "type": "bundleIdCapabilities",
-                "attributes": {"capabilityType": "APP_GROUPS"},
+                "attributes": {
+                    "capabilityType": "APP_GROUPS",
+                    "settings": [{"key": "APP_GROUPS", "options": [{"key": APP_GROUP, "enabled": True}]}],
+                },
                 "relationships": {"bundleId": {"data": {"type": "bundleIds", "id": bundle["id"]}}},
             }
         },
