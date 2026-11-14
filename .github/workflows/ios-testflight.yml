@@ -12,6 +12,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Check signing helpers
+        run: python3 ios/ci/test_appstore_signing.py
+
       - name: Generate the Xcode project
         run: brew install xcodegen && (cd ios && xcodegen generate)
 
@@ -53,6 +56,8 @@ jobs:
           echo "Add the six GitHub secrets, then run this again."
           exit 1
 
+      # Pull requests only compile. A push to main, or a manual run, archives with the
+      # existing distribution certificate. Do not pass -allowProvisioningUpdates.
       - name: Upload to TestFlight
         if: github.event_name != 'pull_request' && steps.secrets.outputs.ready == 'true'
         env:
@@ -64,42 +69,34 @@ jobs:
           IOS_DISTRIBUTION_P12_PASSWORD: ${{ secrets.IOS_DISTRIBUTION_P12_PASSWORD }}
         run: |
           set -euo pipefail
+          umask 077
           KEYCHAIN="$RUNNER_TEMP/signing.keychain-db"
+          cleanup() {
+            rm -f "$RUNNER_TEMP/distribution.p12" "$HOME/private_keys/AuthKey_${APP_STORE_CONNECT_KEY_ID}.p8"
+            security delete-keychain "$KEYCHAIN" >/dev/null 2>&1 || true
+          }
+          trap cleanup EXIT
           security create-keychain -p "" "$KEYCHAIN"
-          security default-keychain -s "$KEYCHAIN"
+          security set-keychain-settings -t 3600 "$KEYCHAIN"
           security unlock-keychain -p "" "$KEYCHAIN"
-          security set-keychain-settings "$KEYCHAIN"
+          security list-keychains -d user -s "$KEYCHAIN" $(security list-keychains -d user | tr -d '"')
+          security default-keychain -s "$KEYCHAIN"
           echo "$IOS_DISTRIBUTION_P12_BASE64" | base64 -D > "$RUNNER_TEMP/distribution.p12"
-          security import "$RUNNER_TEMP/distribution.p12" -k "$KEYCHAIN" -P "$IOS_DISTRIBUTION_P12_PASSWORD" -T /usr/bin/codesign -T /usr/bin/security
-          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "" "$KEYCHAIN"
+          security import "$RUNNER_TEMP/distribution.p12" -k "$KEYCHAIN" -P "$IOS_DISTRIBUTION_P12_PASSWORD" -T /usr/bin/codesign -T /usr/bin/security >/dev/null
           rm -f "$RUNNER_TEMP/distribution.p12"
+          if curl -fsSL -o "$RUNNER_TEMP/wwdr.cer" https://www.apple.com/certificateauthority/AppleWWDRCAG3.cer; then
+            security import "$RUNNER_TEMP/wwdr.cer" -k "$KEYCHAIN" >/dev/null || true
+            rm -f "$RUNNER_TEMP/wwdr.cer"
+          fi
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "" "$KEYCHAIN" >/dev/null
           mkdir -p "$HOME/private_keys"
           echo "$APP_STORE_CONNECT_KEY_P8" | base64 -D > "$HOME/private_keys/AuthKey_${APP_STORE_CONNECT_KEY_ID}.p8"
           chmod 600 "$HOME/private_keys/AuthKey_${APP_STORE_CONNECT_KEY_ID}.p8"
-          python3 - <<'PY'
-          import os
-          from pathlib import Path
-          team = os.environ["APPLE_TEAM_ID"]
-          Path(os.environ["RUNNER_TEMP"], "ExportOptions.plist").write_text(
-              """<?xml version="1.0" encoding="UTF-8"?>
-          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-          <plist version="1.0">
-          <dict>
-            <key>method</key>
-            <string>app-store-connect</string>
-            <key>signingStyle</key>
-            <string>automatic</string>
-            <key>teamID</key>
-            <string>"""
-              + team
-              + """</string>
-            <key>uploadSymbols</key>
-            <true/>
-          </dict>
-          </plist>
-          """
-          )
-          PY
+          SIGNING_KEYCHAIN="$KEYCHAIN" \
+          ASC_KEY_PATH="$HOME/private_keys/AuthKey_${APP_STORE_CONNECT_KEY_ID}.p8" \
+          PBXPROJ="$PWD/ios/Steady.xcodeproj/project.pbxproj" \
+          EXPORT_PLIST="$RUNNER_TEMP/ExportOptions.plist" \
+            python3 ios/ci/appstore_signing.py
           cd ios
           xcodebuild \
             -project Steady.xcodeproj \
@@ -107,23 +104,16 @@ jobs:
             -destination 'generic/platform=iOS' \
             -configuration Release \
             -archivePath "$RUNNER_TEMP/Steady.xcarchive" \
-            -allowProvisioningUpdates \
-            -authenticationKeyPath "$HOME/private_keys/AuthKey_${APP_STORE_CONNECT_KEY_ID}.p8" \
-            -authenticationKeyID "$APP_STORE_CONNECT_KEY_ID" \
-            -authenticationKeyIssuerID "$APP_STORE_CONNECT_ISSUER_ID" \
             DEVELOPMENT_TEAM="$APPLE_TEAM_ID" \
-            CODE_SIGN_STYLE=Automatic \
+            CODE_SIGN_STYLE=Manual \
+            "CODE_SIGN_IDENTITY=Apple Distribution" \
             CURRENT_PROJECT_VERSION="${{ github.run_number }}" \
             archive
           xcodebuild \
             -exportArchive \
             -archivePath "$RUNNER_TEMP/Steady.xcarchive" \
             -exportPath "$RUNNER_TEMP/export" \
-            -exportOptionsPlist "$RUNNER_TEMP/ExportOptions.plist" \
-            -allowProvisioningUpdates \
-            -authenticationKeyPath "$HOME/private_keys/AuthKey_${APP_STORE_CONNECT_KEY_ID}.p8" \
-            -authenticationKeyID "$APP_STORE_CONNECT_KEY_ID" \
-            -authenticationKeyIssuerID "$APP_STORE_CONNECT_ISSUER_ID"
+            -exportOptionsPlist "$RUNNER_TEMP/ExportOptions.plist"
           IPA="$(find "$RUNNER_TEMP/export" -name '*.ipa' -print -quit)"
           test -n "$IPA"
           xcrun altool --upload-app -f "$IPA" -t ios --apiKey "$APP_STORE_CONNECT_KEY_ID" --apiIssuer "$APP_STORE_CONNECT_ISSUER_ID"
