@@ -11,7 +11,9 @@ from appstore_signing import (
     consider_profile,
     der_to_raw,
     distribution_names,
+    is_relationship,
     patch_pbxproj,
+    sanitize_path,
     select_profile,
 )
 
@@ -64,6 +66,20 @@ class SigningTests(unittest.TestCase):
         self.assertFalse(consider(bundle_id="com.brando454.steady.widget"))
         self.assertFalse(consider(certificate_ids={"OTHER"}))
         self.assertFalse(consider(groups=[]))
+        self.assertTrue(consider(groups=[], require_group=False))
+
+    def test_relationship_urls_drop_paging(self) -> None:
+        relationship = "/v1/bundleIds/SUFS6H9D53/bundleIdCapabilities?limit=50&cursor=abc"
+        self.assertTrue(is_relationship(relationship))
+        self.assertEqual(sanitize_path(relationship), "/v1/bundleIds/SUFS6H9D53/bundleIdCapabilities")
+        collection = "/v1/profiles?filter[profileType]=IOS_APP_STORE&limit=200"
+        self.assertFalse(is_relationship(collection))
+        self.assertEqual(sanitize_path(collection), collection)
+        self.assertTrue(is_relationship("/v1/profiles/PROFILE123/certificates?limit=10"))
+        self.assertEqual(
+            sanitize_path("/v1/profiles/PROFILE123/certificates?limit=10"),
+            "/v1/profiles/PROFILE123/certificates",
+        )
 
     def test_latest_profile_wins(self) -> None:
         early = ProfileChoice("old", "2026-12-01T00:00:00Z", "", "1", "com.brando454.steady")
