@@ -69,10 +69,54 @@ export function perServing(total: NutrientTotal, servings: number): NutrientTota
   };
 }
 
-function readMacro(value: unknown, field: string): number {
-  const number = typeof value === "number" ? value : typeof value === "string" && value.trim() !== "" ? Number(value) : Number.NaN;
-  if (!Number.isFinite(number) || number < 0 || number > 20_000) throw new HttpError(400, `${field} looks off`);
+/** A label line. Every field may be null when that line could not be read. */
+export type LabelNutrients = {
+  kcal: number | null;
+  protein_g: number | null;
+  carbs_g: number | null;
+  fat_g: number | null;
+  fiber_g: number | null;
+};
+
+/**
+ * Read one nutrient amount.
+ * "<1" with or without a unit is 0.5. "<0.5" and "trace" are 0.
+ * Any other "<N" is N/2. "mg" is converted to grams. "g", "kcal", and "cal" are stripped.
+ * Unreadable text is null, not zero.
+ */
+export function parseMacro(value: unknown): number | null {
+  if (typeof value === "number") {
+    if (!Number.isFinite(value) || value < 0 || value > 20_000) return null;
+    return round1(value);
+  }
+  if (typeof value !== "string") return null;
+  let text = value.trim().toLowerCase().replace(/\s+/g, "");
+  if (!text) return null;
+  if (text.endsWith("kcal")) text = text.slice(0, -4);
+  else if (text.endsWith("cal")) text = text.slice(0, -3);
+  let milligrams = false;
+  if (text.endsWith("mg")) {
+    milligrams = true;
+    text = text.slice(0, -2);
+  } else if (text.endsWith("g")) text = text.slice(0, -1);
+  if (text === "trace") return 0;
+  let lessThan = false;
+  if (text.startsWith("<")) {
+    lessThan = true;
+    text = text.slice(1);
+  }
+  if (!/^\d+(\.\d+)?$/.test(text)) return null;
+  let number = Number(text);
+  if (lessThan) number = number === 0.5 ? 0 : number / 2;
+  if (milligrams) number /= 1000;
+  if (!Number.isFinite(number) || number < 0 || number > 20_000) return null;
   return round1(number);
+}
+
+function readMacro(value: unknown, field: string): number {
+  const number = parseMacro(value);
+  if (number == null) throw new HttpError(400, `${field} looks off`);
+  return number;
 }
 
 export function readNutrients(value: unknown): Nutrients {
@@ -84,8 +128,24 @@ export function readNutrients(value: unknown): Nutrients {
     protein_g: readMacro(record.protein_g, "protein_g"),
     carbs_g: readMacro(record.carbs_g, "carbs_g"),
     fat_g: readMacro(record.fat_g, "fat_g"),
-    fiber_g: fiber == null ? null : readMacro(fiber, "fiber_g"),
+    fiber_g: fiber == null || fiber === "" ? null : readMacro(fiber, "fiber_g"),
   };
+}
+
+export function readLabelNutrients(value: unknown): LabelNutrients {
+  const record = value && typeof value === "object" ? (value as Record<string, unknown>) : {};
+  const fiber = record.fiber_g;
+  return {
+    kcal: parseMacro(record.kcal),
+    protein_g: parseMacro(record.protein_g),
+    carbs_g: parseMacro(record.carbs_g),
+    fat_g: parseMacro(record.fat_g),
+    fiber_g: fiber == null || fiber === "" ? null : parseMacro(fiber),
+  };
+}
+
+export function labelHasNutrient(nutrients: LabelNutrients): boolean {
+  return [nutrients.kcal, nutrients.protein_g, nutrients.carbs_g, nutrients.fat_g, nutrients.fiber_g].some((value) => value != null);
 }
 
 export function readIngredient(value: unknown): Ingredient {

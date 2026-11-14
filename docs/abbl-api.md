@@ -107,7 +107,7 @@ These routes use the same `AI_API_KEY`, `AI_BASE_URL`, and `AI_MODEL` settings a
 
 Response: `{ "ingredients": [{ "photoIndex": 0, "name", "grams", "nutrients", "confidence" }] }`. At most one ingredient per photo. `confidence` is 0 to 1. Nutrients are for `grams`.
 
-`POST /label-scan` with `{ "photo" }` returns `{ "servingSize", "servingsPerContainer", "nutrients" }` per serving.
+`POST /label-scan` with `{ "photo" }` returns `{ "servingSize", "servingsPerContainer", "nutrients" }` per serving. Each nutrient may be null when that line could not be read. One unreadable line does not fail the scan. The scan fails only when every nutrient is unreadable. `fiber_g` is null when fiber is missing, and 0 when the label says 0. `"<1"` (with or without a unit such as `g`) is read as 0.5. `"<0.5"` and `"trace"` are 0. Any other `"<N"` is `N/2`. A trailing `mg` is converted to grams. `g`, `kcal`, and `cal` are stripped.
 
 `POST /recipe-helper` with `{ "description", "messages"? }` returns `{ "ingredients": [{ "name", "grams", "nutrients", "source" }], "questions": ["..."] }`. Nothing is saved until the app posts a recipe. `messages` is an optional list of `{ "role": "user" | "assistant", "content" }`.
 
