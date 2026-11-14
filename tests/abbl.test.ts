@@ -5,7 +5,8 @@ import test from "node:test";
 import express from "express";
 import { resetRateLimit } from "../src/server/auth";
 import { MemoryAbblStore } from "../src/server/abbl/memory";
-import { totalNutrients } from "../src/server/abbl/nutrients";
+import { parseMacro, totalNutrients } from "../src/server/abbl/nutrients";
+import { parseLabel } from "../src/server/abbl/vision";
 import { createAbblRouter } from "../src/server/abbl/router";
 import { suggestTargets } from "../src/server/abbl/targets";
 import { parseOpenFoodFacts, parseUsdaFoods } from "../src/server/abbl/foods";
@@ -20,7 +21,7 @@ const oats = {
 
 const SETUP = "setup-secret-for-tests";
 
-function listen(store: MemoryAbblStore, now: () => Date = () => new Date("2026-11-14T18:00:00.000Z")) {
+function listen(store: MemoryAbblStore, now: () => Date = () => new Date("2026-11-14T18:00:00.000Z"), fetchImpl?: typeof fetch) {
   const app = express();
   app.use(express.json({ limit: "1mb" }));
   app.use(
@@ -28,6 +29,7 @@ function listen(store: MemoryAbblStore, now: () => Date = () => new Date("2026-1
     createAbblRouter({
       store,
       now,
+      fetch: fetchImpl,
     }),
   );
   app.use((error: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
@@ -121,6 +123,61 @@ async function redeem(base: string, code: string, name?: string) {
     }),
   );
 }
+
+test("label amounts accept less-than, trace, and units", () => {
+  assert.equal(parseMacro("<1"), 0.5);
+  assert.equal(parseMacro("<1g"), 0.5);
+  assert.equal(parseMacro("< 1 g"), 0.5);
+  assert.equal(parseMacro("<0.5"), 0);
+  assert.equal(parseMacro("<0.5g"), 0);
+  assert.equal(parseMacro("trace"), 0);
+  assert.equal(parseMacro("Trace"), 0);
+  assert.equal(parseMacro("0.5g"), 0.5);
+  assert.equal(parseMacro("3.5 g"), 3.5);
+  assert.equal(parseMacro(3.5), 3.5);
+  assert.equal(parseMacro("70 kcal"), 70);
+  assert.equal(parseMacro("70cal"), 70);
+  assert.equal(parseMacro("500mg"), 0.5);
+  assert.equal(parseMacro("<2g"), 1);
+  assert.equal(parseMacro("0g"), 0);
+  assert.equal(parseMacro("not listed"), null);
+});
+
+test("a Kellogg's cracker label with protein <1g still scans", async () => {
+  resetRateLimit();
+  process.env.ABBL_ADMIN_SETUP_CODE = SETUP;
+  process.env.AI_API_KEY = "test-key";
+  const label = {
+    servingSize: "5 crackers (15g)",
+    servingsPerContainer: 5,
+    nutrients: { kcal: 70, fat_g: "3.5 g", carbs_g: "10g", fiber_g: "0g", protein_g: "<1g" },
+  };
+  const fetchImpl: typeof fetch = async () =>
+    new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify(label) } }] }), { status: 200 });
+  const server = await listen(new MemoryAbblStore(), undefined, fetchImpl);
+  try {
+    const admin = await redeem(server.base, SETUP);
+    const scanned = await json(
+      await fetch(`${server.base}/api/abbl/v1/label-scan`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${admin.body.token}` },
+        body: JSON.stringify({ photo: "/9j/4AAQ" }),
+      }),
+    );
+    assert.equal(scanned.status, 200);
+    assert.equal(scanned.body.servingSize, "5 crackers (15g)");
+    assert.deepEqual(scanned.body.nutrients, { kcal: 70, protein_g: 0.5, carbs_g: 10, fat_g: 3.5, fiber_g: 0 });
+    const partial = parseLabel(JSON.stringify({ nutrients: { kcal: 70, protein_g: "lots", carbs_g: "10g", fat_g: "3.5g", fiber_g: null } }));
+    assert.equal(partial.nutrients.protein_g, null);
+    assert.equal(partial.nutrients.fiber_g, null);
+    assert.equal(partial.nutrients.kcal, 70);
+    assert.throws(() => parseLabel(JSON.stringify({ nutrients: { kcal: "nope", protein_g: "lots", fiber_g: "" } })), /didn't come back/);
+  } finally {
+    delete process.env.ABBL_ADMIN_SETUP_CODE;
+    delete process.env.AI_API_KEY;
+    await server.close();
+  }
+});
 
 test("the setup code creates the admin once, and other codes stay invalid", async () => {
   resetRateLimit();

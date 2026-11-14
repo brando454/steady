@@ -1,5 +1,5 @@
 import { HttpError } from "../util";
-import { readNutrients, round1, type Nutrients } from "./nutrients";
+import { labelHasNutrient, readLabelNutrients, readNutrients, round1, type LabelNutrients, type Nutrients } from "./nutrients";
 
 type FetchLike = typeof fetch;
 
@@ -119,13 +119,15 @@ export async function estimatePhotos(photos: string[], note: string | null, fetc
   return parseEstimate(text, photos.length);
 }
 
-export function parseLabel(text: string): { servingSize: string | null; servingsPerContainer: number | null; nutrients: Nutrients } {
+export function parseLabel(text: string): { servingSize: string | null; servingsPerContainer: number | null; nutrients: LabelNutrients } {
   const record = jsonObject(text);
+  const nutrients = readLabelNutrients(record.nutrients);
+  if (!labelHasNutrient(nutrients)) throw new HttpError(502, "The estimate didn't come back");
   const servings = record.servingsPerContainer == null ? null : Number(record.servingsPerContainer);
   return {
     servingSize: typeof record.servingSize === "string" ? record.servingSize.trim().slice(0, 80) : null,
     servingsPerContainer: servings != null && Number.isFinite(servings) && servings > 0 ? round1(servings) : null,
-    nutrients: readNutrients(record.nutrients),
+    nutrients,
   };
 }
 
