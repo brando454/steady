@@ -378,9 +378,9 @@ def create_profile(token: str, bundle_id: str, cert_ids: list[str]) -> ProfileCh
 def profile_for(token: str, bundle_id: str, cert_ids: list[str], now: datetime) -> ProfileChoice:
     found = existing_profile(token, bundle_id, set(cert_ids), now)
     if found is not None:
-        print(f"Using existing App Store profile for {bundle_id}")
+        print(f"Using existing App Store profile for {bundle_id}", flush=True)
         return found
-    print(f"No matching App Store profile for {bundle_id}; creating one")
+    print(f"No matching App Store profile for {bundle_id}; creating one", flush=True)
     return create_profile(token, bundle_id, cert_ids)
 
 
@@ -400,6 +400,14 @@ def main() -> None:
             raise SystemExit(f"Profile {profile.name} has no payload. No certificate was created.")
         install_profile(profile.content_b64, profile.uuid)
     pbxproj = Path(os.environ["PBXPROJ"])
-    pbxproj.write_text(patch_pbxproj(pbxproj.read_text(), names, team))
+    patched = patch_pbxproj(pbxproj.read_text(), names, team)
+    for bundle_id, name in names.items():
+        if json.dumps(name) not in patched:
+            raise SystemExit(f"Could not attach a profile to {bundle_id}. No certificate was created.")
+    pbxproj.write_text(patched)
     Path(os.environ["EXPORT_PLIST"]).write_text(export_options(team, names))
-    print("Manual signing is ready for the app and the widget")
+    print("Manual signing is ready for the app and the widget", flush=True)
+
+
+if __name__ == "__main__":
+    main()

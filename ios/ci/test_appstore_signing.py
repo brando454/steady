@@ -36,6 +36,10 @@ def consider(**overrides: object) -> bool:
 
 
 class SigningTests(unittest.TestCase):
+    def test_script_runs_main(self) -> None:
+        source = Path(__file__).with_name("appstore_signing.py").read_text()
+        self.assertIn('if __name__ == "__main__":\n    main()', source)
+
     def test_der_signature_becomes_raw_rs(self) -> None:
         first = bytes([0x11]) * 32
         second = bytes([0x22]) * 32

@@ -92,6 +92,7 @@ jobs:
           mkdir -p "$HOME/private_keys"
           echo "$APP_STORE_CONNECT_KEY_P8" | base64 -D > "$HOME/private_keys/AuthKey_${APP_STORE_CONNECT_KEY_ID}.p8"
           chmod 600 "$HOME/private_keys/AuthKey_${APP_STORE_CONNECT_KEY_ID}.p8"
+          PYTHONUNBUFFERED=1 \
           SIGNING_KEYCHAIN="$KEYCHAIN" \
           ASC_KEY_PATH="$HOME/private_keys/AuthKey_${APP_STORE_CONNECT_KEY_ID}.p8" \
           PBXPROJ="$PWD/ios/Steady.xcodeproj/project.pbxproj" \
