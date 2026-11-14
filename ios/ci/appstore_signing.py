@@ -200,7 +200,31 @@ def _xml(value: str) -> str:
     return value.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
 
+def is_relationship(path: str) -> bool:
+    """A URL like /v1/bundleIds/{id}/bundleIdCapabilities. Collections such as /v1/profiles are not."""
+    base = path.split("?", 1)[0]
+    parts = [part for part in base.split("/") if part]
+    return len(parts) >= 4 and parts[0] == "v1"
+
+
+def sanitize_path(path: str) -> str:
+    """Relationship endpoints reject limit and cursor. Collection lists may keep them."""
+    if "?" not in path or not is_relationship(path):
+        return path
+    base, query = path.split("?", 1)
+    kept = []
+    for part in query.split("&"):
+        if not part:
+            continue
+        key = part.split("=", 1)[0]
+        if key in {"limit", "cursor", "next"}:
+            continue
+        kept.append(part)
+    return base if not kept else f"{base}?{'&'.join(kept)}"
+
+
 def _api(token: str, method: str, path: str, body: dict | None = None) -> dict:
+    path = sanitize_path(path)
     data = None if body is None else json.dumps(body).encode()
     request = urllib.request.Request(
         API + path,
@@ -226,6 +250,7 @@ def _pages(token: str, path: str) -> list[dict]:
         path = (page.get("links") or {}).get("next") or ""
         if path.startswith(API):
             path = path[len(API) :]
+        path = sanitize_path(path)
     return [{"data": items, "included": included}]
 
 
@@ -274,42 +299,66 @@ def _profile_groups(content: str) -> tuple[dict, list[str]]:
     return decoded, [str(item) for item in groups]
 
 
+def _relationship_ids(resource: dict, name: str) -> set[str]:
+    data = ((resource.get("relationships") or {}).get(name) or {}).get("data") or []
+    if isinstance(data, dict):
+        data = [data]
+    return {item["id"] for item in data if isinstance(item, dict) and item.get("id")}
+
+
+def _profile_certificate_ids(token: str, profile: dict) -> set[str]:
+    linked = _relationship_ids(profile, "certificates")
+    if linked:
+        return linked
+    related = _api(token, "GET", f"/v1/profiles/{profile['id']}/certificates")
+    return {item["id"] for item in related.get("data", []) if isinstance(item, dict) and item.get("id")}
+
+
+def _with_profile_content(token: str, profile: dict) -> dict:
+    attributes = profile.get("attributes") or {}
+    if attributes.get("profileContent"):
+        return profile
+    full = _api(token, "GET", f"/v1/profiles/{profile['id']}")
+    merged = dict(profile)
+    merged["attributes"] = {**attributes, **((full.get("data") or {}).get("attributes") or {})}
+    return merged
+
+
 def existing_profile(token: str, bundle_id: str, cert_ids: set[str], now: datetime) -> ProfileChoice | None:
     bundle = _bundle_resource(token, bundle_id)
     grouped: list[ProfileChoice] = []
     plain: list[ProfileChoice] = []
     seen = 0
-    for page in _pages(token, "/v1/profiles?filter[profileType]=IOS_APP_STORE&include=certificates&limit=200"):
+    for page in _pages(token, "/v1/profiles?filter[profileType]=IOS_APP_STORE&filter[profileState]=ACTIVE&limit=200"):
         for profile in page["data"]:
             seen += 1
             attributes = profile.get("attributes") or {}
-            relationships = profile.get("relationships") or {}
-            bundle_ref = ((relationships.get("bundleId") or {}).get("data") or {}).get("id", "")
-            linked = {
-                item["id"]
-                for item in ((relationships.get("certificates") or {}).get("data") or [])
-                if isinstance(item, dict) and item.get("id")
-            }
-            content = attributes.get("profileContent") or ""
-            decoded, groups = _profile_groups(content)
+            bundle_ref = next(iter(_relationship_ids(profile, "bundleId")), "")
+            if bundle_ref != bundle["id"]:
+                continue
+            linked = _profile_certificate_ids(token, profile)
             if not consider_profile(
-                profile_type=attributes.get("profileType", ""),
-                state=attributes.get("profileState", ""),
+                profile_type=attributes.get("profileType") or "IOS_APP_STORE",
+                state=attributes.get("profileState") or "ACTIVE",
                 expiration=attributes.get("expirationDate", ""),
                 bundle_id=bundle_ref,
                 wanted_bundle=bundle["id"],
                 certificate_ids=linked,
                 wanted_certs=cert_ids,
-                groups=groups,
+                groups=[],
                 now=now,
                 require_group=False,
             ):
                 continue
+            loaded = _with_profile_content(token, profile)
+            loaded_attributes = loaded.get("attributes") or {}
+            content = loaded_attributes.get("profileContent") or ""
+            decoded, groups = _profile_groups(content)
             choice = ProfileChoice(
-                name=attributes.get("name") or decoded.get("Name") or "",
-                expiration=attributes.get("expirationDate", ""),
+                name=loaded_attributes.get("name") or decoded.get("Name") or "",
+                expiration=loaded_attributes.get("expirationDate") or attributes.get("expirationDate", ""),
                 content_b64=content,
-                uuid=str(decoded.get("UUID") or ""),
+                uuid=str(decoded.get("UUID") or loaded_attributes.get("uuid") or ""),
                 bundle_id=bundle_id,
             )
             if APP_GROUP in groups:
@@ -320,11 +369,14 @@ def existing_profile(token: str, bundle_id: str, cert_ids: set[str], now: dateti
         f"{bundle_id}: {seen} App Store profiles, {len(grouped) + len(plain)} tied to the distribution certificate",
         flush=True,
     )
-    return select_profile(grouped) or select_profile(plain)
+    chosen = select_profile(grouped) or select_profile(plain)
+    if chosen is not None and chosen not in grouped:
+        print(f"{bundle_id}: reusing a profile whose app group was not visible in the profile payload", flush=True)
+    return chosen
 
 
 def _bundle_resource(token: str, bundle_id: str) -> dict:
-    found = _api(token, "GET", f"/v1/bundleIds?filter[identifier]={urllib.request.quote(bundle_id)}&include=bundleIdCapabilities&limit=5")
+    found = _api(token, "GET", f"/v1/bundleIds?filter[identifier]={urllib.request.quote(bundle_id)}&limit=5")
     for item in found.get("data", []):
         if (item.get("attributes") or {}).get("identifier") == bundle_id:
             return item
