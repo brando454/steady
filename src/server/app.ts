@@ -2,6 +2,8 @@ import fs from "fs";
 import path from "path";
 import express, { type NextFunction, type Request, type Response } from "express";
 import { fileURLToPath } from "url";
+import { createAbblRouter } from "./abbl/router";
+import { PgAbblStore } from "./abbl/pg";
 import { estimateMeal } from "./ai";
 import {
   COOKIE,
@@ -98,7 +100,11 @@ export function createApp(passcode: string) {
     );
     next();
   });
-  app.use(express.json({ limit: "6mb" }));
+  app.use((req, res, next) => {
+    const limit = req.path === "/api/abbl/v1/estimate" ? "32mb" : "6mb";
+    express.json({ limit })(req, res, next);
+  });
+  app.use("/api/abbl/v1", createAbblRouter({ store: new PgAbblStore() }));
 
   app.get("/health", async (_req, res) => {
     try {
