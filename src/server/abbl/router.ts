@@ -1,25 +1,26 @@
 import { Router } from "express";
 import { rateLimit } from "../auth";
 import { HttpError } from "../util";
-import { emailConfigured, sendSignInCode } from "./email";
 import { lookupBarcode, searchRestaurants, searchUsda } from "./foods";
 import { totalNutrients } from "./nutrients";
-import type { AbblStore } from "./records";
+import type { AbblStore, AbblUser } from "./records";
 import {
-  CODE_TTL_MS,
-  START_BODY,
-  adminEmail,
+  INVITE_TTL_MS,
   assertAdmin,
   codeHash,
   itemsFromMealBody,
-  newCode,
+  newInviteCode,
   newToken,
+  presentInvite,
   presentMeal,
   presentRecipe,
   publicUser,
   readMealMeta,
+  readOptionalEmail,
+  readPersonName,
   readRecipeBody,
   requireUser,
+  setupCodeMatches,
   tokenHash,
 } from "./service";
 import { suggestTargets } from "./targets";
@@ -29,8 +30,6 @@ export type AbblDeps = {
   store: AbblStore;
   now?: () => Date;
   fetch?: typeof fetch;
-  sendCode?: (email: string, code: string) => Promise<void>;
-  emailReady?: () => boolean;
 };
 
 function asyncRoute(fn: (req: import("express").Request, res: import("express").Response) => Promise<unknown>) {
@@ -43,53 +42,68 @@ export function createAbblRouter(deps: AbblDeps): Router {
   const store = deps.store;
   const now = deps.now ?? (() => new Date());
   const fetchImpl = deps.fetch ?? fetch;
-  const ready = deps.emailReady ?? emailConfigured;
-  const send = deps.sendCode ?? sendSignInCode;
   const router = Router();
 
-  router.post(
-    "/auth/start",
-    asyncRoute(async (req, res) => {
-      if (!ready()) throw new HttpError(503, "Email sign-in is not configured");
-      const ip = req.ip || "unknown";
-      if (!rateLimit(`abbl-start:${ip}`, 8, 15 * 60 * 1000, now().getTime())) {
-        throw new HttpError(429, "Too many tries. Wait a few minutes.");
-      }
-      const email = typeof req.body?.email === "string" ? req.body.email.trim().toLowerCase() : "";
-      if (email && !rateLimit(`abbl-start-email:${email}`, 5, 15 * 60 * 1000, now().getTime())) {
-        throw new HttpError(429, "Too many tries. Wait a few minutes.");
-      }
-      const normalized = typeof req.body?.email === "string" ? req.body.email.trim().toLowerCase() : null;
-      const valid = normalized && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalized) ? normalized : null;
-      if (valid && (await store.isAllowed(valid))) {
-        const code = newCode();
-        await store.saveCode(valid, codeHash(valid, code), new Date(now().getTime() + CODE_TTL_MS));
-        try {
-          await send(valid, code);
-        } catch {
-          /* Same response either way, so the allow list stays private. The code is not logged. */
-        }
-      }
-      res.json(START_BODY);
-    }),
-  );
+  async function issueToken(user: AbblUser) {
+    const token = newToken();
+    await store.saveToken(user.id, tokenHash(token));
+    return { token, user: publicUser(user) };
+  }
+
+  async function issueInvite(admin: AbblUser, input: { name: string; email: string | null; userId: string | null }) {
+    const code = newInviteCode();
+    const invite = await store.insertInvite({
+      codeHash: codeHash(code),
+      name: input.name,
+      email: input.email,
+      userId: input.userId,
+      createdBy: admin.id,
+      expiresAt: new Date(now().getTime() + INVITE_TTL_MS),
+    });
+    return { invite: presentInvite(invite, now()), code };
+  }
 
   router.post(
-    "/auth/verify",
+    "/auth/redeem",
     asyncRoute(async (req, res) => {
-      const email = typeof req.body?.email === "string" ? req.body.email.trim().toLowerCase() : "";
-      const code = typeof req.body?.code === "string" ? req.body.code.trim() : "";
-      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || !/^\d{6}$/.test(code)) {
-        throw new HttpError(401, "That code is not valid");
+      const ip = req.ip || "unknown";
+      if (!rateLimit(`abbl-redeem:${ip}`, 8, 15 * 60 * 1000, now().getTime())) {
+        throw new HttpError(429, "Too many tries. Wait a few minutes.");
       }
-      const match = await store.consumeCode(email, codeHash(email, code), now());
-      if (!match || !(await store.isAllowed(email))) throw new HttpError(401, "That code is not valid");
-      let user = await store.userByEmail(email);
-      if (user?.disabled) throw new HttpError(403, "This account is disabled");
-      if (!user) user = await store.createUser(email);
-      const token = newToken();
-      await store.saveToken(user.id, tokenHash(token));
-      res.json({ token, user: publicUser(user, adminEmail()) });
+      const code = typeof req.body?.code === "string" ? req.body.code : "";
+      const name = readPersonName(req.body?.name, false);
+      if (!code.trim()) throw new HttpError(401, "That code is not valid");
+      if (setupCodeMatches(code)) {
+        let admin = await store.findAdmin();
+        if (!admin) {
+          try {
+            admin = await store.createUser({ name: name ?? "Admin", email: null, admin: true });
+          } catch {
+            admin = await store.findAdmin();
+          }
+        } else if (admin.disabled) {
+          await store.enableUser(admin.id);
+          if (name) await store.updateName(admin.id, name);
+          admin = await store.userById(admin.id);
+        } else if (name) {
+          admin = await store.updateName(admin.id, name);
+        }
+        if (!admin) throw new HttpError(401, "That code is not valid");
+        res.json(await issueToken(admin));
+        return;
+      }
+      const invite = await store.consumeInvite(codeHash(code), now());
+      if (!invite) throw new HttpError(401, "That code is not valid");
+      if (invite.userId) {
+        const existing = await store.userById(invite.userId);
+        if (!existing || existing.disabled) throw new HttpError(403, "This account is disabled");
+        const named = name ? await store.updateName(existing.id, name) : existing;
+        res.json(await issueToken(named ?? existing));
+        return;
+      }
+      const created = await store.createUser({ name: name ?? invite.name, email: invite.email, admin: false });
+      await store.linkInviteUser(invite.id, created.id);
+      res.json(await issueToken(created));
     }),
   );
 
@@ -108,7 +122,7 @@ export function createAbblRouter(deps: AbblDeps): Router {
     "/me",
     asyncRoute(async (req, res) => {
       const user = await requireUser(store, req.get("authorization"));
-      res.json({ user: publicUser(user, adminEmail()) });
+      res.json({ user: publicUser(user) });
     }),
   );
 
@@ -116,28 +130,44 @@ export function createAbblRouter(deps: AbblDeps): Router {
     "/admin/invites",
     asyncRoute(async (req, res) => {
       assertAdmin(await requireUser(store, req.get("authorization")));
-      res.json({ invites: await store.listInvites() });
+      const invites = await store.listInvites();
+      const users = await store.listUsers();
+      res.json({
+        invites: invites.map((invite) => presentInvite(invite, now())),
+        users: users.map((person) => ({ ...publicUser(person), disabled: person.disabled })),
+      });
     }),
   );
 
   router.post(
     "/admin/invites",
     asyncRoute(async (req, res) => {
-      assertAdmin(await requireUser(store, req.get("authorization")));
-      const email = typeof req.body?.email === "string" ? req.body.email.trim().toLowerCase() : "";
-      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new HttpError(400, "Email looks off");
-      await store.allow(email);
-      res.status(201).json({ email, status: (await store.userByEmail(email))?.disabled === false ? "joined" : "invited" });
+      const admin = await requireUser(store, req.get("authorization"));
+      assertAdmin(admin);
+      const name = readPersonName(req.body?.name, true);
+      const email = readOptionalEmail(req.body?.email);
+      res.status(201).json(await issueInvite(admin, { name: name ?? "Guest", email, userId: null }));
     }),
   );
 
   router.delete(
-    "/admin/invites/:email",
+    "/admin/invites/:id",
     asyncRoute(async (req, res) => {
       assertAdmin(await requireUser(store, req.get("authorization")));
-      const email = decodeURIComponent(req.params.email).trim().toLowerCase();
-      if (!(await store.unallow(email))) throw new HttpError(404, "Invite not found");
+      if (!(await store.revokeInvite(req.params.id))) throw new HttpError(404, "Invite not found");
       res.json({ ok: true });
+    }),
+  );
+
+  router.post(
+    "/admin/users/:id/invite",
+    asyncRoute(async (req, res) => {
+      const admin = await requireUser(store, req.get("authorization"));
+      assertAdmin(admin);
+      const person = await store.userById(req.params.id);
+      if (!person) throw new HttpError(404, "User not found");
+      if (person.disabled) throw new HttpError(400, "This account is disabled");
+      res.status(201).json(await issueInvite(admin, { name: person.name, email: person.email, userId: person.id }));
     }),
   );
 

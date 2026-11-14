@@ -3,22 +3,23 @@ import type { Queryable } from "../db";
 export const ABBL_SQL = `
 CREATE TABLE IF NOT EXISTS abbl_users (
   id uuid PRIMARY KEY,
-  email text NOT NULL UNIQUE,
+  name text NOT NULL,
+  email text,
+  admin boolean NOT NULL DEFAULT false,
   created_at timestamptz NOT NULL DEFAULT now(),
   disabled_at timestamptz
 );
 
-CREATE TABLE IF NOT EXISTS abbl_allow (
-  email text PRIMARY KEY,
-  created_at timestamptz NOT NULL DEFAULT now()
-);
-
-CREATE TABLE IF NOT EXISTS abbl_codes (
+CREATE TABLE IF NOT EXISTS abbl_invites (
   id uuid PRIMARY KEY,
-  email text NOT NULL,
-  code_hash text NOT NULL,
+  code_hash text NOT NULL UNIQUE,
+  name text NOT NULL,
+  email text,
+  user_id uuid REFERENCES abbl_users(id),
+  created_by uuid REFERENCES abbl_users(id),
   expires_at timestamptz NOT NULL,
   used_at timestamptz,
+  revoked_at timestamptz,
   created_at timestamptz NOT NULL DEFAULT now()
 );
 
@@ -89,16 +90,37 @@ CREATE TABLE IF NOT EXISTS abbl_meal_items (
   source text
 );
 
-CREATE INDEX IF NOT EXISTS abbl_codes_email_idx ON abbl_codes (email, created_at DESC);
+CREATE INDEX IF NOT EXISTS abbl_invites_user_idx ON abbl_invites (user_id);
 CREATE INDEX IF NOT EXISTS abbl_tokens_user_idx ON abbl_tokens (user_id);
 CREATE INDEX IF NOT EXISTS abbl_recipes_user_idx ON abbl_recipes (user_id);
 CREATE INDEX IF NOT EXISTS abbl_meals_user_date_idx ON abbl_meals (user_id, meal_date);
 `;
 
-/** Invite and one-time-code rows are keyed by email because the person may not have an account yet. */
+/** The first draft of this branch used email codes. Fold that shape into invite codes if it is already present. */
+const ABBL_AUTH_REPAIR = `
+DROP TABLE IF EXISTS abbl_codes;
+DROP TABLE IF EXISTS abbl_allow;
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_schema = 'public' AND table_name = 'abbl_users' AND column_name = 'email'
+  ) AND NOT EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_schema = 'public' AND table_name = 'abbl_users' AND column_name = 'name'
+  ) THEN
+    ALTER TABLE abbl_users ADD COLUMN name text;
+    ALTER TABLE abbl_users ADD COLUMN admin boolean NOT NULL DEFAULT false;
+    UPDATE abbl_users SET name = split_part(email, '@', 1) WHERE name IS NULL;
+    ALTER TABLE abbl_users ALTER COLUMN name SET NOT NULL;
+    ALTER TABLE abbl_users ALTER COLUMN email DROP NOT NULL;
+    ALTER TABLE abbl_users DROP CONSTRAINT IF EXISTS abbl_users_email_key;
+  END IF;
+END $$;
+`;
+
 export async function migrateAbbl(client: Queryable): Promise<void> {
   await client.query(ABBL_SQL);
-  const admin = process.env.ABBL_ADMIN_EMAIL?.trim().toLowerCase();
-  if (!admin) return;
-  await client.query("INSERT INTO abbl_allow (email) VALUES ($1) ON CONFLICT (email) DO NOTHING", [admin]);
+  await client.query(ABBL_AUTH_REPAIR);
+  await client.query("CREATE UNIQUE INDEX IF NOT EXISTS abbl_one_admin_idx ON abbl_users ((true)) WHERE admin");
 }

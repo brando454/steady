@@ -2,14 +2,40 @@ import type { Ingredient, Nutrients } from "./nutrients";
 
 export type AbblUser = {
   id: string;
-  email: string;
+  name: string;
+  email: string | null;
+  admin: boolean;
   disabled: boolean;
 };
 
-export type Invite = {
-  email: string;
-  status: "invited" | "joined" | "disabled";
+export type InviteStatus = "pending" | "used" | "revoked" | "expired";
+
+export type InviteRecord = {
+  id: string;
+  codeHash: string;
+  name: string;
+  email: string | null;
   userId: string | null;
+  createdBy: string | null;
+  expiresAt: string;
+  usedAt: string | null;
+  revokedAt: string | null;
+  createdAt: string;
+};
+
+export type NewInvite = {
+  codeHash: string;
+  name: string;
+  email: string | null;
+  userId: string | null;
+  createdBy: string;
+  expiresAt: Date;
+};
+
+export type NewUser = {
+  name: string;
+  email: string | null;
+  admin: boolean;
 };
 
 export type RecipeRecord = {
@@ -41,17 +67,18 @@ export type SteadyFavorite = {
 };
 
 export type AbblStore = {
-  isAllowed(email: string): Promise<boolean>;
-  allow(email: string): Promise<void>;
-  unallow(email: string): Promise<boolean>;
-  listInvites(): Promise<Invite[]>;
-  saveCode(email: string, codeHash: string, expiresAt: Date): Promise<void>;
-  consumeCode(email: string, codeHash: string, now: Date): Promise<boolean>;
-  userByEmail(email: string): Promise<AbblUser | null>;
+  findAdmin(): Promise<AbblUser | null>;
   userById(id: string): Promise<AbblUser | null>;
-  createUser(email: string): Promise<AbblUser>;
+  createUser(input: NewUser): Promise<AbblUser>;
+  updateName(id: string, name: string): Promise<AbblUser | null>;
+  listUsers(): Promise<AbblUser[]>;
   disableUser(id: string): Promise<boolean>;
-  enableUser(email: string): Promise<void>;
+  enableUser(id: string): Promise<void>;
+  insertInvite(invite: NewInvite): Promise<InviteRecord>;
+  listInvites(): Promise<InviteRecord[]>;
+  revokeInvite(id: string): Promise<boolean>;
+  consumeInvite(codeHash: string, now: Date): Promise<InviteRecord | null>;
+  linkInviteUser(inviteId: string, userId: string): Promise<void>;
   saveToken(userId: string, tokenHash: string): Promise<void>;
   userForToken(tokenHash: string): Promise<AbblUser | null>;
   revokeToken(tokenHash: string): Promise<void>;

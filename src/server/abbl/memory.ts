@@ -1,64 +1,42 @@
 import { randomUUID } from "crypto";
 import type { Nutrients } from "./nutrients";
-import type { AbblStore, AbblUser, Invite, MealRecord, NewMeal, NewRecipe, RecipeRecord, SteadyFavorite } from "./records";
+import type { AbblStore, AbblUser, InviteRecord, MealRecord, NewInvite, NewMeal, NewRecipe, NewUser, RecipeRecord, SteadyFavorite } from "./records";
 
-type CodeRow = { email: string; codeHash: string; expiresAt: number; used: boolean };
 type TokenRow = { userId: string; tokenHash: string; revoked: boolean };
 
 export class MemoryAbblStore implements AbblStore {
-  allowList = new Set<string>();
   users = new Map<string, AbblUser>();
-  codes: CodeRow[] = [];
+  invites: InviteRecord[] = [];
   tokens: TokenRow[] = [];
   targets = new Map<string, Nutrients>();
   recipes = new Map<string, { userId: string; recipe: RecipeRecord }>();
   meals = new Map<string, { userId: string; meal: MealRecord }>();
   favorites: SteadyFavorite[] = [];
 
-  async isAllowed(email: string): Promise<boolean> {
-    return this.allowList.has(email);
-  }
-
-  async allow(email: string): Promise<void> {
-    this.allowList.add(email);
-    await this.enableUser(email);
-  }
-
-  async unallow(email: string): Promise<boolean> {
-    return this.allowList.delete(email);
-  }
-
-  async listInvites(): Promise<Invite[]> {
-    return [...this.allowList].sort().map((email) => {
-      const user = [...this.users.values()].find((item) => item.email === email) ?? null;
-      const status = !user ? "invited" : user.disabled ? "disabled" : "joined";
-      return { email, status, userId: user?.id ?? null };
-    });
-  }
-
-  async saveCode(email: string, codeHash: string, expiresAt: Date): Promise<void> {
-    this.codes.push({ email, codeHash, expiresAt: expiresAt.getTime(), used: false });
-  }
-
-  async consumeCode(email: string, codeHash: string, now: Date): Promise<boolean> {
-    const row = [...this.codes].reverse().find((item) => item.email === email && item.codeHash === codeHash && !item.used && item.expiresAt > now.getTime());
-    if (!row) return false;
-    row.used = true;
-    return true;
-  }
-
-  async userByEmail(email: string): Promise<AbblUser | null> {
-    return [...this.users.values()].find((user) => user.email === email) ?? null;
+  async findAdmin(): Promise<AbblUser | null> {
+    return [...this.users.values()].find((user) => user.admin) ?? null;
   }
 
   async userById(id: string): Promise<AbblUser | null> {
     return this.users.get(id) ?? null;
   }
 
-  async createUser(email: string): Promise<AbblUser> {
-    const user = { id: randomUUID(), email, disabled: false };
+  async createUser(input: NewUser): Promise<AbblUser> {
+    if (input.admin && (await this.findAdmin())) throw new Error("admin exists");
+    const user = { id: randomUUID(), name: input.name, email: input.email, admin: input.admin, disabled: false };
     this.users.set(user.id, user);
     return user;
+  }
+
+  async updateName(id: string, name: string): Promise<AbblUser | null> {
+    const user = this.users.get(id);
+    if (!user) return null;
+    user.name = name;
+    return user;
+  }
+
+  async listUsers(): Promise<AbblUser[]> {
+    return [...this.users.values()];
   }
 
   async disableUser(id: string): Promise<boolean> {
@@ -69,9 +47,50 @@ export class MemoryAbblStore implements AbblStore {
     return true;
   }
 
-  async enableUser(email: string): Promise<void> {
-    const user = await this.userByEmail(email);
+  async enableUser(id: string): Promise<void> {
+    const user = this.users.get(id);
     if (user) user.disabled = false;
+  }
+
+  async insertInvite(invite: NewInvite): Promise<InviteRecord> {
+    const now = new Date().toISOString();
+    const row: InviteRecord = {
+      id: randomUUID(),
+      codeHash: invite.codeHash,
+      name: invite.name,
+      email: invite.email,
+      userId: invite.userId,
+      createdBy: invite.createdBy,
+      expiresAt: invite.expiresAt.toISOString(),
+      usedAt: null,
+      revokedAt: null,
+      createdAt: now,
+    };
+    this.invites.push(row);
+    return row;
+  }
+
+  async listInvites(): Promise<InviteRecord[]> {
+    return [...this.invites];
+  }
+
+  async revokeInvite(id: string): Promise<boolean> {
+    const row = this.invites.find((item) => item.id === id);
+    if (!row || row.usedAt) return false;
+    row.revokedAt = row.revokedAt ?? new Date().toISOString();
+    return true;
+  }
+
+  async consumeInvite(codeHash: string, now: Date): Promise<InviteRecord | null> {
+    const row = this.invites.find((item) => item.codeHash === codeHash && !item.usedAt && !item.revokedAt && Date.parse(item.expiresAt) > now.getTime());
+    if (!row) return null;
+    row.usedAt = now.toISOString();
+    return row;
+  }
+
+  async linkInviteUser(inviteId: string, userId: string): Promise<void> {
+    const row = this.invites.find((item) => item.id === inviteId);
+    if (row && !row.userId) row.userId = userId;
   }
 
   async saveToken(userId: string, tokenHash: string): Promise<void> {

@@ -1,36 +1,77 @@
 import { createHash, randomBytes, randomInt } from "crypto";
+import { secretsMatch } from "../auth";
 import { HttpError, cleanText, readDate } from "../util";
-import { perServing, readIngredient, scaleIngredient, totalNutrients, type Ingredient, type Nutrients } from "./nutrients";
-import type { AbblStore, AbblUser, MealRecord, NewMeal, NewRecipe, RecipeRecord } from "./records";
+import { perServing, readIngredient, scaleIngredient, totalNutrients, type Ingredient } from "./nutrients";
+import type { AbblStore, AbblUser, InviteRecord, InviteStatus, MealRecord, NewRecipe, RecipeRecord } from "./records";
 
-export const CODE_TTL_MS = 10 * 60 * 1000;
-export const START_BODY = { ok: true };
+export const INVITE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+const INVITE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 
-export function normalizeEmail(value: unknown): string | null {
-  if (typeof value !== "string") return null;
-  const email = value.trim().toLowerCase();
-  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || email.length > 200) return null;
-  return email;
+export function newInviteCode(): string {
+  const chars = Array.from({ length: 12 }, () => INVITE_ALPHABET[randomInt(INVITE_ALPHABET.length)]);
+  return `${chars.slice(0, 4).join("")}-${chars.slice(4, 8).join("")}-${chars.slice(8).join("")}`;
 }
 
-export function codeHash(email: string, code: string): string {
-  return createHash("sha256").update(`${email}:${code}`).digest("hex");
+export function codeHash(code: string): string {
+  const normalized = code.trim().toUpperCase().replace(/[^A-Z0-9]/g, "");
+  return createHash("sha256").update(normalized).digest("hex");
 }
 
 export function tokenHash(token: string): string {
   return createHash("sha256").update(token).digest("hex");
 }
 
-export function newCode(): string {
-  return String(randomInt(0, 1_000_000)).padStart(6, "0");
-}
-
 export function newToken(): string {
   return randomBytes(32).toString("base64url");
 }
 
-export function publicUser(user: AbblUser, adminEmail: string | null): { id: string; email: string; admin: boolean } {
-  return { id: user.id, email: user.email, admin: adminEmail != null && user.email === adminEmail };
+export function setupCodeMatches(presented: string): boolean {
+  const expected = process.env.ABBL_ADMIN_SETUP_CODE?.trim() ?? "";
+  const given = presented.trim();
+  if (!expected || !given) return false;
+  return secretsMatch(given, expected);
+}
+
+export function readPersonName(value: unknown, required: boolean): string | null {
+  if (value == null || value === "") {
+    if (required) throw new HttpError(400, "Name is missing");
+    return null;
+  }
+  if (typeof value !== "string") throw new HttpError(400, "Name looks off");
+  const name = value.trim();
+  if (!name || name.length > 80) throw new HttpError(400, "Name looks off");
+  return name;
+}
+
+export function readOptionalEmail(value: unknown): string | null {
+  if (value == null || value === "") return null;
+  if (typeof value !== "string") throw new HttpError(400, "Email looks off");
+  const email = value.trim().toLowerCase();
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || email.length > 200) throw new HttpError(400, "Email looks off");
+  return email;
+}
+
+export function inviteStatus(invite: InviteRecord, now: Date): InviteStatus {
+  if (invite.revokedAt) return "revoked";
+  if (invite.usedAt) return "used";
+  if (Date.parse(invite.expiresAt) <= now.getTime()) return "expired";
+  return "pending";
+}
+
+export function presentInvite(invite: InviteRecord, now: Date) {
+  return {
+    id: invite.id,
+    name: invite.name,
+    email: invite.email,
+    userId: invite.userId,
+    status: inviteStatus(invite, now),
+    expiresAt: invite.expiresAt,
+    createdAt: invite.createdAt,
+  };
+}
+
+export function publicUser(user: AbblUser): { id: string; name: string; email: string | null; admin: boolean } {
+  return { id: user.id, name: user.name, email: user.email, admin: user.admin };
 }
 
 export function presentRecipe(recipe: RecipeRecord) {
@@ -113,13 +154,6 @@ export async function requireUser(store: AbblStore, header: string | undefined):
   return user;
 }
 
-export function adminEmail(): string | null {
-  const email = process.env.ABBL_ADMIN_EMAIL?.trim().toLowerCase() ?? "";
-  return email || null;
-}
-
 export function assertAdmin(user: AbblUser): void {
-  const email = adminEmail();
-  if (!email) throw new HttpError(503, "ABBL admin is not configured");
-  if (user.email !== email) throw new HttpError(403, "Admin only");
+  if (!user.admin) throw new HttpError(403, "Admin only");
 }

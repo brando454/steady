@@ -18,18 +18,16 @@ const oats = {
   nutrients: { kcal: 200, protein_g: 10, carbs_g: 30, fat_g: 4, fiber_g: 5 as number | null },
 };
 
-function listen(store: MemoryAbblStore, sent: { email: string; code: string }[], ready = true) {
+const SETUP = "setup-secret-for-tests";
+
+function listen(store: MemoryAbblStore, now: () => Date = () => new Date("2026-11-14T18:00:00.000Z")) {
   const app = express();
   app.use(express.json({ limit: "1mb" }));
   app.use(
     "/api/abbl/v1",
     createAbblRouter({
       store,
-      emailReady: () => ready,
-      sendCode: async (email, code) => {
-        sent.push({ email, code });
-      },
-      now: () => new Date("2026-11-14T18:00:00.000Z"),
+      now,
     }),
   );
   app.use((error: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
@@ -114,63 +112,112 @@ test("USDA and Open Food Facts keep a missing fiber null", () => {
   assert.equal(off?.per100g?.fiber_g, null);
 });
 
-test("auth hides the allow list, then signs in only an invited address", async () => {
+async function redeem(base: string, code: string, name?: string) {
+  return json(
+    await fetch(`${base}/api/abbl/v1/auth/redeem`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(name ? { code, name } : { code }),
+    }),
+  );
+}
+
+test("the setup code creates the admin once, and other codes stay invalid", async () => {
   resetRateLimit();
+  process.env.ABBL_ADMIN_SETUP_CODE = SETUP;
   const store = new MemoryAbblStore();
-  await store.allow("kate@example.com");
-  const sent: { email: string; code: string }[] = [];
-  const server = await listen(store, sent);
+  const server = await listen(store);
   try {
-    const hidden = await json(await fetch(`${server.base}/api/abbl/v1/auth/start`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ email: "nope@example.com" }) }));
-    const invited = await json(await fetch(`${server.base}/api/abbl/v1/auth/start`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ email: "Kate@example.com" }) }));
-    assert.equal(hidden.status, 200);
-    assert.deepEqual(hidden.body, invited.body);
-    assert.deepEqual(sent.map((item) => item.email), ["kate@example.com"]);
-    const bad = await json(await fetch(`${server.base}/api/abbl/v1/auth/verify`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ email: "kate@example.com", code: "000000" }) }));
+    const bad = await redeem(server.base, "nope-nope-nope");
     assert.equal(bad.status, 401);
-    const ok = await json(await fetch(`${server.base}/api/abbl/v1/auth/verify`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ email: "kate@example.com", code: sent[0].code }) }));
-    assert.equal(ok.status, 200);
-    assert.equal((ok.body.user as { email: string; admin: boolean }).email, "kate@example.com");
-    assert.equal((ok.body.user as { admin: boolean }).admin, false);
-    const me = await json(await fetch(`${server.base}/api/abbl/v1/me`, { headers: { Authorization: `Bearer ${ok.body.token}` } }));
+    const first = await redeem(server.base, SETUP, "Brandon");
+    const second = await redeem(server.base, `  ${SETUP}  `);
+    assert.equal(first.status, 200);
+    assert.equal((first.body.user as { admin: boolean; name: string }).admin, true);
+    assert.equal((first.body.user as { name: string }).name, "Brandon");
+    assert.equal((second.body.user as { id: string }).id, (first.body.user as { id: string }).id);
+    assert.equal(store.users.size, 1);
+    const me = await json(await fetch(`${server.base}/api/abbl/v1/me`, { headers: { Authorization: `Bearer ${first.body.token}` } }));
     assert.equal(me.status, 200);
+  } finally {
+    delete process.env.ABBL_ADMIN_SETUP_CODE;
+    await server.close();
+  }
+});
+
+test("redeem is rate-limited per IP", async () => {
+  resetRateLimit();
+  const server = await listen(new MemoryAbblStore());
+  try {
+    for (let i = 0; i < 8; i += 1) {
+      const attempt = await redeem(server.base, `bad-${i}`);
+      assert.equal(attempt.status, 401);
+    }
+    const limited = await redeem(server.base, "bad-last");
+    assert.equal(limited.status, 429);
   } finally {
     await server.close();
   }
 });
 
-test("sign-in is 503 for everyone when email is not configured", async () => {
+test("invite codes are single-use, hashed, and can sign the same user in again", async () => {
   resetRateLimit();
+  process.env.ABBL_ADMIN_SETUP_CODE = SETUP;
   const store = new MemoryAbblStore();
-  await store.allow("kate@example.com");
-  const server = await listen(store, [], false);
+  const server = await listen(store);
   try {
-    const a = await json(await fetch(`${server.base}/api/abbl/v1/auth/start`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ email: "kate@example.com" }) }));
-    const b = await json(await fetch(`${server.base}/api/abbl/v1/auth/start`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ email: "nope@example.com" }) }));
-    assert.equal(a.status, 503);
-    assert.deepEqual(a.body, b.body);
+    const admin = await redeem(server.base, SETUP, "Brandon");
+    const created = await json(
+      await fetch(`${server.base}/api/abbl/v1/admin/invites`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${admin.body.token}` },
+        body: JSON.stringify({ name: "Kate", email: "kate@example.com" }),
+      }),
+    );
+    const code = String(created.body.code);
+    assert.match(code, /^[ABCDEFGHJKLMNPQRSTUVWXYZ23456789]{4}(?:-[ABCDEFGHJKLMNPQRSTUVWXYZ23456789]{4}){2}$/);
+    const listed = await json(await fetch(`${server.base}/api/abbl/v1/admin/invites`, { headers: { Authorization: `Bearer ${admin.body.token}` } }));
+    const listedText = JSON.stringify(listed.body);
+    assert.equal(listedText.includes(code), false);
+    assert.equal(listedText.includes("codeHash"), false);
+    assert.equal(store.invites.some((invite) => invite.codeHash === code), false);
+    const kate = await redeem(server.base, code.toLowerCase());
+    assert.equal((kate.body.user as { name: string; admin: boolean; email: string }).name, "Kate");
+    assert.equal((kate.body.user as { admin: boolean }).admin, false);
+    assert.equal((kate.body.user as { email: string }).email, "kate@example.com");
+    const spent = await redeem(server.base, code);
+    assert.equal(spent.status, 401);
+    const phone = await json(
+      await fetch(`${server.base}/api/abbl/v1/admin/users/${(kate.body.user as { id: string }).id}/invite`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${admin.body.token}` },
+      }),
+    );
+    const again = await redeem(server.base, String(phone.body.code));
+    assert.equal((again.body.user as { id: string }).id, (kate.body.user as { id: string }).id);
   } finally {
+    delete process.env.ABBL_ADMIN_SETUP_CODE;
     await server.close();
   }
 });
 
 test("users cannot read each other, recipes scale, and sharing copies", async () => {
   resetRateLimit();
-  process.env.ABBL_ADMIN_EMAIL = "brandon@example.com";
+  process.env.ABBL_ADMIN_SETUP_CODE = SETUP;
   const store = new MemoryAbblStore();
-  await store.allow("brandon@example.com");
-  await store.allow("kate@example.com");
-  const sent: { email: string; code: string }[] = [];
-  const server = await listen(store, sent);
-  const auth = async (email: string) => {
-    await fetch(`${server.base}/api/abbl/v1/auth/start`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ email }) });
-    const code = [...sent].reverse().find((item) => item.email === email)?.code;
-    const verified = await json(await fetch(`${server.base}/api/abbl/v1/auth/verify`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ email, code }) }));
-    return { token: String(verified.body.token), id: String((verified.body.user as { id: string }).id) };
-  };
+  const server = await listen(store);
   try {
-    const brandon = await auth("brandon@example.com");
-    const kate = await auth("kate@example.com");
+    const admin = await redeem(server.base, SETUP, "Brandon");
+    const invited = await json(
+      await fetch(`${server.base}/api/abbl/v1/admin/invites`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${admin.body.token}` },
+        body: JSON.stringify({ name: "Kate" }),
+      }),
+    );
+    const kateSession = await redeem(server.base, String(invited.body.code));
+    const brandon = { token: String(admin.body.token), id: String((admin.body.user as { id: string }).id) };
+    const kate = { token: String(kateSession.body.token), id: String((kateSession.body.user as { id: string }).id) };
     const created = await json(
       await fetch(`${server.base}/api/abbl/v1/recipes`, {
         method: "POST",
@@ -246,25 +293,33 @@ test("users cannot read each other, recipes scale, and sharing copies", async ()
     assert.equal("fiber_g" in (favorite.body.favorite as object), false);
     assert.equal(store.favorites.length, 1);
   } finally {
-    delete process.env.ABBL_ADMIN_EMAIL;
+    delete process.env.ABBL_ADMIN_SETUP_CODE;
     await server.close();
   }
 });
 
 test("removing a user revokes access and keeps their recipes", async () => {
   resetRateLimit();
-  process.env.ABBL_ADMIN_EMAIL = "brandon@example.com";
+  process.env.ABBL_ADMIN_SETUP_CODE = SETUP;
   const store = new MemoryAbblStore();
-  await store.allow("brandon@example.com");
-  await store.allow("kate@example.com");
-  const sent: { email: string; code: string }[] = [];
-  const server = await listen(store, sent);
+  const server = await listen(store);
   try {
-    await fetch(`${server.base}/api/abbl/v1/auth/start`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ email: "brandon@example.com" }) });
-    await fetch(`${server.base}/api/abbl/v1/auth/start`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ email: "kate@example.com" }) });
-    const brandon = await json(await fetch(`${server.base}/api/abbl/v1/auth/verify`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ email: "brandon@example.com", code: sent.find((item) => item.email === "brandon@example.com")?.code }) }));
-    const kate = await json(await fetch(`${server.base}/api/abbl/v1/auth/verify`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ email: "kate@example.com", code: sent.find((item) => item.email === "kate@example.com")?.code }) }));
+    const brandon = await redeem(server.base, SETUP, "Brandon");
+    const invited = await json(
+      await fetch(`${server.base}/api/abbl/v1/admin/invites`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${brandon.body.token}` },
+        body: JSON.stringify({ name: "Kate" }),
+      }),
+    );
+    const kate = await redeem(server.base, String(invited.body.code));
     const kateId = (kate.body.user as { id: string }).id;
+    const fresh = await json(
+      await fetch(`${server.base}/api/abbl/v1/admin/users/${kateId}/invite`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${brandon.body.token}` },
+      }),
+    );
     await fetch(`${server.base}/api/abbl/v1/recipes`, {
       method: "POST",
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${kate.body.token}` },
@@ -275,19 +330,74 @@ test("removing a user revokes access and keeps their recipes", async () => {
     const blocked = await json(await fetch(`${server.base}/api/abbl/v1/me`, { headers: { Authorization: `Bearer ${kate.body.token}` } }));
     assert.equal(blocked.status, 401);
     assert.equal(store.recipes.size, 1);
-    await fetch(`${server.base}/api/abbl/v1/auth/start`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ email: "kate@example.com" }) });
-    const again = await json(await fetch(`${server.base}/api/abbl/v1/auth/verify`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ email: "kate@example.com", code: [...sent].reverse().find((item) => item.email === "kate@example.com")?.code }) }));
+    const again = await redeem(server.base, String(fresh.body.code));
     assert.equal(again.status, 403);
+    const reinvite = await json(
+      await fetch(`${server.base}/api/abbl/v1/admin/users/${kateId}/invite`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${brandon.body.token}` },
+      }),
+    );
+    assert.equal(reinvite.status, 400);
   } finally {
-    delete process.env.ABBL_ADMIN_EMAIL;
+    delete process.env.ABBL_ADMIN_SETUP_CODE;
     await server.close();
   }
 });
 
-test("ABBL does not call Nightscout", () => {
+test("an unused invite can be revoked", async () => {
+  resetRateLimit();
+  process.env.ABBL_ADMIN_SETUP_CODE = SETUP;
+  const server = await listen(new MemoryAbblStore());
+  try {
+    const admin = await redeem(server.base, SETUP);
+    const created = await json(
+      await fetch(`${server.base}/api/abbl/v1/admin/invites`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${admin.body.token}` },
+        body: JSON.stringify({ name: "Sam" }),
+      }),
+    );
+    const id = (created.body.invite as { id: string }).id;
+    const revoked = await json(await fetch(`${server.base}/api/abbl/v1/admin/invites/${id}`, { method: "DELETE", headers: { Authorization: `Bearer ${admin.body.token}` } }));
+    assert.equal(revoked.status, 200);
+    const attempt = await redeem(server.base, String(created.body.code));
+    assert.equal(attempt.status, 401);
+  } finally {
+    delete process.env.ABBL_ADMIN_SETUP_CODE;
+    await server.close();
+  }
+});
+
+test("an invite expires after 7 days", async () => {
+  resetRateLimit();
+  process.env.ABBL_ADMIN_SETUP_CODE = SETUP;
+  let clock = Date.parse("2026-11-14T18:00:00.000Z");
+  const server = await listen(new MemoryAbblStore(), () => new Date(clock));
+  try {
+    const admin = await redeem(server.base, SETUP);
+    const created = await json(
+      await fetch(`${server.base}/api/abbl/v1/admin/invites`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${admin.body.token}` },
+        body: JSON.stringify({ name: "Sam" }),
+      }),
+    );
+    clock += 8 * 24 * 60 * 60 * 1000;
+    const attempt = await redeem(server.base, String(created.body.code));
+    assert.equal(attempt.status, 401);
+  } finally {
+    delete process.env.ABBL_ADMIN_SETUP_CODE;
+    await server.close();
+  }
+});
+
+test("ABBL does not call Nightscout or send email", () => {
   const files = readdirSync(new URL("../src/server/abbl/", import.meta.url));
   for (const file of files) {
     const source = readFileSync(new URL(`../src/server/abbl/${file}`, import.meta.url), "utf8");
     assert.equal(/nightscout/i.test(source), false, file);
+    assert.equal(/resend/i.test(source), false, file);
+    assert.equal(source.includes("ABBL_ADMIN_EMAIL"), false, file);
   }
 });

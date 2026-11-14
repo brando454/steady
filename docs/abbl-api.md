@@ -4,7 +4,7 @@ Nutrition-only API for the ABBL iPhone app. It is served by Steady's Express ser
 
 Every ABBL response is JSON. Errors are `{ "error": "..." }`.
 
-The caller sends `Authorization: Bearer <token>` on every route except `POST /auth/start` and `POST /auth/verify`.
+The caller sends `Authorization: Bearer <token>` on every route except `POST /auth/redeem`.
 
 Dates are the phone's civil date, `YYYY-MM-DD`. Times are `HH:mm`. They are not America/Boise dates.
 
@@ -32,31 +32,29 @@ Photos are not stored. Request logs do not include meal names, notes, ingredient
 
 ## Auth
 
-`POST /auth/start` with `{ "email" }`.
+There is no email and no password. Sign-in is `POST /auth/redeem` with `{ "code", "name"? }`. It is rate-limited per IP. A wrong, expired, revoked, or already-used code is `401`. Too many tries is `429`.
 
-- Only allow-listed addresses are emailed a 6-digit code. The code expires after 10 minutes.
-- The response is always `{ "ok": true }` when email sending is configured, whether or not that address is on the list and whether or not the send succeeded. That keeps the list private.
-- `503` `{ "error": "Email sign-in is not configured" }` when `RESEND_API_KEY` or `ABBL_EMAIL_FROM` is missing. This is the same for every caller.
-- `429` after too many tries from the same IP or email.
+The admin bootstraps with `ABBL_ADMIN_SETUP_CODE`, a secret Brandon sets in Render. Redeeming that code creates the admin, or signs the same admin in again. `name` is optional. The first time it is omitted, the name is `Admin`. A later redeem with `name` renames the admin. The setup code stays valid.
 
-`POST /auth/verify` with `{ "email", "code" }` returns:
+Everyone else redeems a single-use invite code. The response is:
 
 ```json
-{ "token": "<long-lived bearer>", "user": { "id": "...", "email": "kate@example.com", "admin": false } }
+{ "token": "<long-lived bearer>", "user": { "id": "...", "name": "Kate", "email": null, "admin": false } }
 ```
 
-The token is stored only as a hash. It lasts until logout or until an admin removes the user. A wrong or expired code is `401`. A valid code for a disabled account is `403`.
+`email` is null when nobody set one. The token is stored only as a hash. It lasts until logout or until an admin removes the user. A valid invite for a disabled account is `403`, and that invite is already spent.
 
 `POST /auth/logout` revokes the current token. `GET /me` returns `{ "user": { ... } }`.
 
 ## Admin
 
-Brandon is the only admin. His address is `ABBL_ADMIN_EMAIL`, and startup adds that address to the allow list.
+Only the account created with the setup code has `admin: true`.
 
-- `GET /admin/invites` returns `{ "invites": [{ "email", "status", "userId" }] }`. `status` is `invited`, `joined`, or `disabled`.
-- `POST /admin/invites` with `{ "email" }` adds the address. Inviting a disabled account again turns it back on.
-- `DELETE /admin/invites/:email` removes the address from the allow list. It does not disable someone who already joined.
-- `DELETE /admin/users/:id` disables that user and revokes their tokens. Their recipes and meals stay in the database. The admin cannot remove their own account.
+- `POST /admin/invites` with `{ "name", "email"? }` creates one invite. The code looks like `ABCD-EFGH-JKM2`: three groups of four characters, with no `0`, `O`, `1`, `I`, or `L`. It is valid for 7 days and works once. The response includes `code` once. The database stores only a hash.
+- `GET /admin/invites` returns `{ "invites", "users" }`. Invites are `{ id, name, email, userId, status, expiresAt, createdAt }` with status `pending`, `used`, `revoked`, or `expired`. Users are `{ id, name, email, admin, disabled }`. Neither list includes a code.
+- `DELETE /admin/invites/:id` revokes an unused code. A used code is `404`.
+- `DELETE /admin/users/:id` disables that user and revokes their tokens. Their recipes and meals stay. The admin cannot remove their own account.
+- `POST /admin/users/:id/invite` issues a new one-time code that signs that same user in on another phone. A disabled account cannot be invited.
 
 ## Targets
 

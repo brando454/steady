@@ -39,11 +39,7 @@ services:
         value: https://api.openai.com/v1
       - key: AI_MODEL
         value: gpt-4o-mini
-      - key: RESEND_API_KEY
-        sync: false
-      - key: ABBL_EMAIL_FROM
-        sync: false
-      - key: ABBL_ADMIN_EMAIL
+      - key: ABBL_ADMIN_SETUP_CODE
         sync: false
       - key: USDA_API_KEY
         sync: false

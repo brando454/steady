@@ -1,9 +1,21 @@
 import { randomUUID } from "crypto";
 import { pool, rows, tx, type Queryable } from "../db";
 import type { Ingredient, Nutrients } from "./nutrients";
-import type { AbblStore, AbblUser, Invite, MealRecord, NewMeal, NewRecipe, RecipeRecord, SteadyFavorite } from "./records";
+import type { AbblStore, AbblUser, InviteRecord, MealRecord, NewInvite, NewMeal, NewRecipe, NewUser, RecipeRecord, SteadyFavorite } from "./records";
 
-type UserRow = { id: string; email: string; disabled_at: Date | null };
+type UserRow = { id: string; name: string; email: string | null; admin: boolean; disabled_at: Date | null };
+type InviteRow = {
+  id: string;
+  code_hash: string;
+  name: string;
+  email: string | null;
+  user_id: string | null;
+  created_by: string | null;
+  expires_at: Date | string;
+  used_at: Date | string | null;
+  revoked_at: Date | string | null;
+  created_at: Date | string;
+};
 type IngredientRow = {
   sort_order: number;
   name: string;
@@ -16,9 +28,30 @@ type IngredientRow = {
   source: string | null;
 };
 
-function userOf(row: UserRow): AbblUser {
-  return { id: row.id, email: row.email, disabled: row.disabled_at != null };
+function iso(value: Date | string): string {
+  return value instanceof Date ? value.toISOString() : new Date(value).toISOString();
 }
+
+function userOf(row: UserRow): AbblUser {
+  return { id: row.id, name: row.name, email: row.email, admin: row.admin, disabled: row.disabled_at != null };
+}
+
+function inviteOf(row: InviteRow): InviteRecord {
+  return {
+    id: row.id,
+    codeHash: row.code_hash,
+    name: row.name,
+    email: row.email,
+    userId: row.user_id,
+    createdBy: row.created_by,
+    expiresAt: iso(row.expires_at),
+    usedAt: row.used_at == null ? null : iso(row.used_at),
+    revokedAt: row.revoked_at == null ? null : iso(row.revoked_at),
+    createdAt: iso(row.created_at),
+  };
+}
+
+const USER_COLUMNS = "id, name, email, admin, disabled_at";
 
 function ingredientOf(row: IngredientRow): Ingredient {
   return {
@@ -38,73 +71,34 @@ function ingredientOf(row: IngredientRow): Ingredient {
 export class PgAbblStore implements AbblStore {
   constructor(private readonly db: Queryable = pool) {}
 
-  async isAllowed(email: string): Promise<boolean> {
-    const found = await rows<{ email: string }>(this.db, "SELECT email FROM abbl_allow WHERE email = $1", [email]);
-    return Boolean(found[0]);
-  }
-
-  async allow(email: string): Promise<void> {
-    await this.db.query("INSERT INTO abbl_allow (email) VALUES ($1) ON CONFLICT (email) DO NOTHING", [email]);
-    await this.enableUser(email);
-  }
-
-  async unallow(email: string): Promise<boolean> {
-    const result = await this.db.query("DELETE FROM abbl_allow WHERE email = $1", [email]);
-    return (result.rowCount ?? 0) > 0;
-  }
-
-  async listInvites(): Promise<Invite[]> {
-    const found = await rows<{ email: string; user_id: string | null; disabled_at: Date | null }>(
-      this.db,
-      `SELECT a.email, u.id AS user_id, u.disabled_at
-       FROM abbl_allow a
-       LEFT JOIN abbl_users u ON u.email = a.email
-       ORDER BY a.email`,
-    );
-    return found.map((row) => ({
-      email: row.email,
-      userId: row.user_id,
-      status: !row.user_id ? "invited" : row.disabled_at ? "disabled" : "joined",
-    }));
-  }
-
-  async saveCode(email: string, codeHash: string, expiresAt: Date): Promise<void> {
-    await this.db.query("INSERT INTO abbl_codes (id, email, code_hash, expires_at) VALUES ($1,$2,$3,$4)", [
-      randomUUID(),
-      email,
-      codeHash,
-      expiresAt,
-    ]);
-  }
-
-  async consumeCode(email: string, codeHash: string, now: Date): Promise<boolean> {
-    const result = await this.db.query(
-      `UPDATE abbl_codes SET used_at = $3
-       WHERE id = (
-         SELECT id FROM abbl_codes
-         WHERE email = $1 AND code_hash = $2 AND used_at IS NULL AND expires_at > $3
-         ORDER BY created_at DESC
-         LIMIT 1
-       )`,
-      [email, codeHash, now],
-    );
-    return (result.rowCount ?? 0) > 0;
-  }
-
-  async userByEmail(email: string): Promise<AbblUser | null> {
-    const found = await rows<UserRow>(this.db, "SELECT id, email, disabled_at FROM abbl_users WHERE email = $1", [email]);
+  async findAdmin(): Promise<AbblUser | null> {
+    const found = await rows<UserRow>(this.db, `SELECT ${USER_COLUMNS} FROM abbl_users WHERE admin = true LIMIT 1`);
     return found[0] ? userOf(found[0]) : null;
   }
 
   async userById(id: string): Promise<AbblUser | null> {
-    const found = await rows<UserRow>(this.db, "SELECT id, email, disabled_at FROM abbl_users WHERE id = $1", [id]);
+    const found = await rows<UserRow>(this.db, `SELECT ${USER_COLUMNS} FROM abbl_users WHERE id = $1`, [id]);
     return found[0] ? userOf(found[0]) : null;
   }
 
-  async createUser(email: string): Promise<AbblUser> {
+  async createUser(input: NewUser): Promise<AbblUser> {
     const id = randomUUID();
-    await this.db.query("INSERT INTO abbl_users (id, email) VALUES ($1,$2)", [id, email]);
-    return { id, email, disabled: false };
+    const found = await rows<UserRow>(
+      this.db,
+      `INSERT INTO abbl_users (id, name, email, admin) VALUES ($1,$2,$3,$4) RETURNING ${USER_COLUMNS}`,
+      [id, input.name, input.email, input.admin],
+    );
+    return userOf(found[0]);
+  }
+
+  async updateName(id: string, name: string): Promise<AbblUser | null> {
+    const found = await rows<UserRow>(this.db, `UPDATE abbl_users SET name = $2 WHERE id = $1 RETURNING ${USER_COLUMNS}`, [id, name]);
+    return found[0] ? userOf(found[0]) : null;
+  }
+
+  async listUsers(): Promise<AbblUser[]> {
+    const found = await rows<UserRow>(this.db, `SELECT ${USER_COLUMNS} FROM abbl_users ORDER BY created_at`);
+    return found.map(userOf);
   }
 
   async disableUser(id: string): Promise<boolean> {
@@ -114,8 +108,52 @@ export class PgAbblStore implements AbblStore {
     return true;
   }
 
-  async enableUser(email: string): Promise<void> {
-    await this.db.query("UPDATE abbl_users SET disabled_at = NULL WHERE email = $1", [email]);
+  async enableUser(id: string): Promise<void> {
+    await this.db.query("UPDATE abbl_users SET disabled_at = NULL WHERE id = $1", [id]);
+  }
+
+  async insertInvite(invite: NewInvite): Promise<InviteRecord> {
+    const found = await rows<InviteRow>(
+      this.db,
+      `INSERT INTO abbl_invites (id, code_hash, name, email, user_id, created_by, expires_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7)
+       RETURNING id, code_hash, name, email, user_id, created_by, expires_at, used_at, revoked_at, created_at`,
+      [randomUUID(), invite.codeHash, invite.name, invite.email, invite.userId, invite.createdBy, invite.expiresAt],
+    );
+    return inviteOf(found[0]);
+  }
+
+  async listInvites(): Promise<InviteRecord[]> {
+    const found = await rows<InviteRow>(
+      this.db,
+      `SELECT id, code_hash, name, email, user_id, created_by, expires_at, used_at, revoked_at, created_at
+       FROM abbl_invites ORDER BY created_at`,
+    );
+    return found.map(inviteOf);
+  }
+
+  async revokeInvite(id: string): Promise<boolean> {
+    const result = await this.db.query("UPDATE abbl_invites SET revoked_at = COALESCE(revoked_at, now()) WHERE id = $1 AND used_at IS NULL", [id]);
+    return (result.rowCount ?? 0) > 0;
+  }
+
+  async consumeInvite(codeHash: string, now: Date): Promise<InviteRecord | null> {
+    const found = await rows<InviteRow>(
+      this.db,
+      `UPDATE abbl_invites SET used_at = $2
+       WHERE id = (
+         SELECT id FROM abbl_invites
+         WHERE code_hash = $1 AND used_at IS NULL AND revoked_at IS NULL AND expires_at > $2
+         LIMIT 1
+       )
+       RETURNING id, code_hash, name, email, user_id, created_by, expires_at, used_at, revoked_at, created_at`,
+      [codeHash, now],
+    );
+    return found[0] ? inviteOf(found[0]) : null;
+  }
+
+  async linkInviteUser(inviteId: string, userId: string): Promise<void> {
+    await this.db.query("UPDATE abbl_invites SET user_id = $2 WHERE id = $1 AND user_id IS NULL", [inviteId, userId]);
   }
 
   async saveToken(userId: string, tokenHash: string): Promise<void> {
@@ -125,7 +163,7 @@ export class PgAbblStore implements AbblStore {
   async userForToken(tokenHash: string): Promise<AbblUser | null> {
     const found = await rows<UserRow>(
       this.db,
-      `SELECT u.id, u.email, u.disabled_at
+      `SELECT u.id, u.name, u.email, u.admin, u.disabled_at
        FROM abbl_tokens t
        JOIN abbl_users u ON u.id = t.user_id
        WHERE t.token_hash = $1 AND t.revoked_at IS NULL AND u.disabled_at IS NULL`,
