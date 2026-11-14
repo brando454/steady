@@ -1,3 +1,4 @@
+import { migrateAbbl } from "./abbl/schema";
 import { pool, tx } from "./db";
 import { migrateSupersets } from "./supersetMigrate";
 
@@ -160,5 +161,8 @@ CREATE TABLE IF NOT EXISTS nightscout_deletes (
 
 export async function migrate(): Promise<void> {
   await pool.query(SCHEMA_SQL);
-  await tx((client) => migrateSupersets(client));
+  await tx(async (client) => {
+    await migrateSupersets(client);
+    await migrateAbbl(client);
+  });
 }

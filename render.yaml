@@ -39,6 +39,16 @@ services:
         value: https://api.openai.com/v1
       - key: AI_MODEL
         value: gpt-4o-mini
+      - key: RESEND_API_KEY
+        sync: false
+      - key: ABBL_EMAIL_FROM
+        sync: false
+      - key: ABBL_ADMIN_EMAIL
+        sync: false
+      - key: USDA_API_KEY
+        sync: false
+      - key: SPOONACULAR_API_KEY
+        sync: false
 
 databases:
   - name: steady-db
