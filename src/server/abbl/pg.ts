@@ -1,6 +1,6 @@
 import { randomUUID } from "crypto";
 import { pool, rows, tx, type Queryable } from "../db";
-import type { Ingredient, Nutrients } from "./nutrients";
+import { INGREDIENT_UNITS, type Ingredient, type IngredientUnit, type Nutrients } from "./nutrients";
 import type { AbblStore, AbblUser, InviteRecord, MealRecord, NewInvite, NewMeal, NewRecipe, NewUser, RecipeRecord, SteadyFavorite } from "./records";
 
 type UserRow = { id: string; name: string; email: string | null; admin: boolean; disabled_at: Date | null };
@@ -19,6 +19,8 @@ type InviteRow = {
 type IngredientRow = {
   sort_order: number;
   name: string;
+  quantity: number | null;
+  unit: string | null;
   grams: number;
   kcal: number;
   protein_g: number;
@@ -53,9 +55,16 @@ function inviteOf(row: InviteRow): InviteRecord {
 
 const USER_COLUMNS = "id, name, email, admin, disabled_at";
 
+function ingredientUnit(value: string | null): IngredientUnit | null {
+  if (value == null) return null;
+  return (INGREDIENT_UNITS as readonly string[]).includes(value) ? (value as IngredientUnit) : null;
+}
+
 function ingredientOf(row: IngredientRow): Ingredient {
   return {
     name: row.name,
+    quantity: row.quantity == null ? null : Number(row.quantity),
+    unit: ingredientUnit(row.unit),
     grams: Number(row.grams),
     nutrients: {
       kcal: Number(row.kcal),
@@ -213,7 +222,7 @@ export class PgAbblStore implements AbblStore {
     if (!recipeIds.length) return grouped;
     const found = await rows<IngredientRow & { recipe_id: string }>(
       this.db,
-      `SELECT recipe_id, sort_order, name, grams, kcal, protein_g, carbs_g, fat_g, fiber_g, source
+      `SELECT recipe_id, sort_order, name, quantity, unit, grams, kcal, protein_g, carbs_g, fat_g, fiber_g, source
        FROM abbl_recipe_ingredients
        WHERE user_id = $1 AND recipe_id = ANY($2::uuid[])
        ORDER BY sort_order`,
@@ -265,14 +274,16 @@ export class PgAbblStore implements AbblStore {
       const item = ingredients[index];
       await client.query(
         `INSERT INTO abbl_recipe_ingredients (
-           id, recipe_id, user_id, sort_order, name, grams, kcal, protein_g, carbs_g, fat_g, fiber_g, source
-         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
+           id, recipe_id, user_id, sort_order, name, quantity, unit, grams, kcal, protein_g, carbs_g, fat_g, fiber_g, source
+         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
         [
           randomUUID(),
           recipeId,
           userId,
           index,
           item.name,
+          item.quantity,
+          item.unit,
           item.grams,
           item.nutrients.kcal,
           item.nutrients.protein_g,
@@ -335,7 +346,7 @@ export class PgAbblStore implements AbblStore {
     if (!mealIds.length) return grouped;
     const found = await rows<IngredientRow & { meal_id: string }>(
       this.db,
-      `SELECT meal_id, sort_order, name, grams, kcal, protein_g, carbs_g, fat_g, fiber_g, source
+      `SELECT meal_id, sort_order, name, quantity, unit, grams, kcal, protein_g, carbs_g, fat_g, fiber_g, source
        FROM abbl_meal_items
        WHERE user_id = $1 AND meal_id = ANY($2::uuid[])
        ORDER BY sort_order`,
@@ -376,14 +387,16 @@ export class PgAbblStore implements AbblStore {
       const item = items[index];
       await client.query(
         `INSERT INTO abbl_meal_items (
-           id, meal_id, user_id, sort_order, name, grams, kcal, protein_g, carbs_g, fat_g, fiber_g, source
-         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
+           id, meal_id, user_id, sort_order, name, quantity, unit, grams, kcal, protein_g, carbs_g, fat_g, fiber_g, source
+         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
         [
           randomUUID(),
           mealId,
           userId,
           index,
           item.name,
+          item.quantity,
+          item.unit,
           item.grams,
           item.nutrients.kcal,
           item.nutrients.protein_g,

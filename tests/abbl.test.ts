@@ -5,7 +5,7 @@ import test from "node:test";
 import express from "express";
 import { resetRateLimit } from "../src/server/auth";
 import { MemoryAbblStore } from "../src/server/abbl/memory";
-import { parseMacro, totalNutrients } from "../src/server/abbl/nutrients";
+import { parseMacro, readIngredient, scaleIngredient, totalNutrients } from "../src/server/abbl/nutrients";
 import { parseLabel } from "../src/server/abbl/vision";
 import { createAbblRouter } from "../src/server/abbl/router";
 import { suggestTargets } from "../src/server/abbl/targets";
@@ -443,6 +443,81 @@ test("an invite expires after 7 days", async () => {
     clock += 8 * 24 * 60 * 60 * 1000;
     const attempt = await redeem(server.base, String(created.body.code));
     assert.equal(attempt.status, 401);
+  } finally {
+    delete process.env.ABBL_ADMIN_SETUP_CODE;
+    await server.close();
+  }
+});
+
+test("ingredient quantity and unit round trip, and grams stay the nutrition amount", async () => {
+  const broth = {
+    name: "Chicken broth",
+    quantity: 3.5,
+    unit: "cup",
+    grams: 840,
+    source: "ai",
+    nutrients: { kcal: 59, protein_g: 4, carbs_g: 5, fat_g: 1.7, fiber_g: 0 },
+  };
+  const read = readIngredient(broth);
+  assert.equal(read.quantity, 3.5);
+  assert.equal(read.unit, "cup");
+  const old = readIngredient({ name: "Oats", grams: 40, source: "manual", nutrients: broth.nutrients });
+  assert.equal(old.quantity, null);
+  assert.equal(old.unit, null);
+  const scaled = scaleIngredient(read, 0.5);
+  assert.equal(scaled.quantity, 1.8);
+  assert.equal(scaled.grams, 420);
+  assert.equal(scaled.unit, "cup");
+  assert.equal(scaled.nutrients.kcal, 29.5);
+  const scaledOld = scaleIngredient(old, 2);
+  assert.equal(scaledOld.quantity, null);
+  assert.equal(scaledOld.unit, null);
+  assert.equal(scaledOld.grams, 80);
+  assert.throws(() => readIngredient({ ...broth, unit: "lb" }), /unit looks off/);
+  assert.throws(() => readIngredient({ ...broth, quantity: 0 }), /quantity looks off/);
+  assert.throws(() => readIngredient({ ...broth, grams: 0 }), /grams looks off/);
+
+  resetRateLimit();
+  process.env.ABBL_ADMIN_SETUP_CODE = SETUP;
+  const server = await listen(new MemoryAbblStore());
+  try {
+    const admin = await redeem(server.base, SETUP, "Brandon");
+    const created = await json(
+      await fetch(`${server.base}/api/abbl/v1/recipes`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${admin.body.token}` },
+        body: JSON.stringify({ name: "Soup", servings: 2, ingredients: [broth, { name: "Oats", grams: 40, nutrients: broth.nutrients }] }),
+      }),
+    );
+    assert.equal(created.status, 201);
+    const ingredients = (created.body.recipe as { ingredients: { quantity: number | null; unit: string | null; grams: number }[] }).ingredients;
+    assert.deepEqual(
+      ingredients.map((item) => ({ quantity: item.quantity, unit: item.unit, grams: item.grams })),
+      [
+        { quantity: 3.5, unit: "cup", grams: 840 },
+        { quantity: null, unit: null, grams: 40 },
+      ],
+    );
+    const logged = await json(
+      await fetch(`${server.base}/api/abbl/v1/meals`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${admin.body.token}` },
+        body: JSON.stringify({ date: "2026-11-14", time: "12:00", recipeId: (created.body.recipe as { id: string }).id, servings: 1 }),
+      }),
+    );
+    const items = (logged.body.meal as { items: { quantity: number | null; unit: string | null; grams: number }[] }).items;
+    assert.equal(items[0].quantity, 1.8);
+    assert.equal(items[0].unit, "cup");
+    assert.equal(items[0].grams, 420);
+    assert.equal(items[1].quantity, null);
+    const bad = await json(
+      await fetch(`${server.base}/api/abbl/v1/recipes`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${admin.body.token}` },
+        body: JSON.stringify({ name: "Nope", servings: 1, ingredients: [{ ...broth, unit: "gallon" }] }),
+      }),
+    );
+    assert.equal(bad.status, 400);
   } finally {
     delete process.env.ABBL_ADMIN_SETUP_CODE;
     await server.close();
