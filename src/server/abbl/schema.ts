@@ -58,6 +58,8 @@ CREATE TABLE IF NOT EXISTS abbl_recipe_ingredients (
   user_id uuid NOT NULL REFERENCES abbl_users(id),
   sort_order integer NOT NULL,
   name text NOT NULL,
+  quantity numeric,
+  unit text,
   grams numeric NOT NULL,
   kcal numeric NOT NULL,
   protein_g numeric NOT NULL,
@@ -81,6 +83,8 @@ CREATE TABLE IF NOT EXISTS abbl_meal_items (
   user_id uuid NOT NULL REFERENCES abbl_users(id),
   sort_order integer NOT NULL,
   name text NOT NULL,
+  quantity numeric,
+  unit text,
   grams numeric NOT NULL,
   kcal numeric NOT NULL,
   protein_g numeric NOT NULL,
@@ -89,6 +93,11 @@ CREATE TABLE IF NOT EXISTS abbl_meal_items (
   fiber_g numeric,
   source text
 );
+
+ALTER TABLE abbl_recipe_ingredients ADD COLUMN IF NOT EXISTS quantity numeric;
+ALTER TABLE abbl_recipe_ingredients ADD COLUMN IF NOT EXISTS unit text;
+ALTER TABLE abbl_meal_items ADD COLUMN IF NOT EXISTS quantity numeric;
+ALTER TABLE abbl_meal_items ADD COLUMN IF NOT EXISTS unit text;
 
 CREATE INDEX IF NOT EXISTS abbl_invites_user_idx ON abbl_invites (user_id);
 CREATE INDEX IF NOT EXISTS abbl_tokens_user_idx ON abbl_tokens (user_id);

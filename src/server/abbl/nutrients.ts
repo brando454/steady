@@ -11,8 +11,13 @@ export type Nutrients = {
 
 export type NutrientTotal = Nutrients & { fiber_unknown: boolean };
 
+export const INGREDIENT_UNITS = ["g", "oz", "cup", "tbsp", "tsp", "piece"] as const;
+export type IngredientUnit = (typeof INGREDIENT_UNITS)[number];
+
 export type Ingredient = {
   name: string;
+  quantity: number | null;
+  unit: IngredientUnit | null;
   grams: number;
   nutrients: Nutrients;
   source: string | null;
@@ -148,6 +153,21 @@ export function labelHasNutrient(nutrients: LabelNutrients): boolean {
   return [nutrients.kcal, nutrients.protein_g, nutrients.carbs_g, nutrients.fat_g, nutrients.fiber_g].some((value) => value != null);
 }
 
+function readQuantity(value: unknown): number | null {
+  if (value == null || value === "") return null;
+  const number = typeof value === "number" ? value : typeof value === "string" && value.trim() !== "" ? Number(value) : Number.NaN;
+  if (!Number.isFinite(number) || number <= 0) throw new HttpError(400, "quantity looks off");
+  return round1(number);
+}
+
+function readUnit(value: unknown): IngredientUnit | null {
+  if (value == null || value === "") return null;
+  if (typeof value !== "string") throw new HttpError(400, "unit looks off");
+  const unit = value.trim().toLowerCase();
+  if (!(INGREDIENT_UNITS as readonly string[]).includes(unit)) throw new HttpError(400, "unit looks off");
+  return unit as IngredientUnit;
+}
+
 export function readIngredient(value: unknown): Ingredient {
   if (!value || typeof value !== "object") throw new HttpError(400, "Ingredient is missing");
   const record = value as Record<string, unknown>;
@@ -157,12 +177,21 @@ export function readIngredient(value: unknown): Ingredient {
   if (grams <= 0) throw new HttpError(400, "grams looks off");
   const source = record.source == null || record.source === "" ? null : typeof record.source === "string" ? record.source.trim().slice(0, 40) : null;
   if (record.source != null && record.source !== "" && source == null) throw new HttpError(400, "source looks off");
-  return { name, grams, nutrients: readNutrients(record.nutrients), source };
+  return {
+    name,
+    quantity: readQuantity(record.quantity),
+    unit: readUnit(record.unit),
+    grams,
+    nutrients: readNutrients(record.nutrients),
+    source,
+  };
 }
 
 export function scaleIngredient(ingredient: Ingredient, factor: number): Ingredient {
   return {
     name: ingredient.name,
+    quantity: ingredient.quantity == null ? null : round1(ingredient.quantity * factor),
+    unit: ingredient.unit,
     grams: round1(ingredient.grams * factor),
     nutrients: scaleNutrients(ingredient.nutrients, factor),
     source: ingredient.source,

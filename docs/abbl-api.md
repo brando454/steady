@@ -122,10 +122,12 @@ Response: `{ "ingredients": [{ "photoIndex": 0, "name", "grams", "nutrients", "c
   "yieldGrams": 1300,
   "notes": "optional",
   "ingredients": [
-    { "name": "Chicken breast", "grams": 600, "source": "usda", "nutrients": { "kcal": 660, "protein_g": 138, "carbs_g": 0, "fat_g": 7.2, "fiber_g": 0 } }
+    { "name": "Chicken broth", "quantity": 3.5, "unit": "cup", "grams": 840, "source": "ai", "nutrients": { "kcal": 59, "protein_g": 4, "carbs_g": 5, "fat_g": 1.7, "fiber_g": 0 } }
   ]
 }
 ```
+
+Each ingredient may include `quantity` and `unit`. `unit` is `g`, `oz`, `cup`, `tbsp`, `tsp`, `piece`, or null. `quantity` is a number greater than 0, or null when the ingredient only has a gram amount. Older rows come back with both set to null. `grams` is what the nutrients describe. Logging a portion scales `quantity` by the same factor as `grams` and leaves a null quantity null. The unit stays as it was. A bad unit or quantity is `400`. Omitting both fields is the same as sending null.
 
 The response adds `totals` and `perServing`. `perServing` divides those totals by `servings`.
 
@@ -152,7 +154,7 @@ The response adds `totals` and `perServing`. `perServing` divides those totals b
 { "date": "2026-11-14", "time": "18:00", "recipeId": "...", "grams": 325 }
 ```
 
-`servings` scales by `servings / recipe.servings`. `grams` scales by `grams / yieldGrams`, and is rejected when the recipe has no cooked weight. The logged items are a snapshot, so later recipe edits do not change the day. `DELETE /meals/:id` removes that meal.
+`servings` scales by `servings / recipe.servings`. `grams` scales by `grams / yieldGrams`, and is rejected when the recipe has no cooked weight. A saved `quantity` scales by that same factor. The logged items are a snapshot, so later recipe edits do not change the day. `DELETE /meals/:id` removes that meal.
 
 A meal has no separate name or note. Item names are stored so the day can be shown again. They are not written to server logs, photos, or Nightscout.
 
