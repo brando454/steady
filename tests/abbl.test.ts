@@ -6,7 +6,7 @@ import express from "express";
 import { resetRateLimit } from "../src/server/auth";
 import { MemoryAbblStore } from "../src/server/abbl/memory";
 import { parseMacro, readIngredient, scaleIngredient, totalNutrients } from "../src/server/abbl/nutrients";
-import { parseLabel } from "../src/server/abbl/vision";
+import { estimatePhotos, fillNutrition, helpRecipe, parseEstimate, parseLabel } from "../src/server/abbl/vision";
 import { createAbblRouter } from "../src/server/abbl/router";
 import { suggestTargets } from "../src/server/abbl/targets";
 import { parseOpenFoodFacts, parseUsdaFoods } from "../src/server/abbl/foods";
@@ -177,6 +177,97 @@ test("a Kellogg's cracker label with protein <1g still scans", async () => {
     delete process.env.AI_API_KEY;
     await server.close();
   }
+});
+
+test("a photo can return every ingredient, including a labeled box", () => {
+  const zeros = { kcal: 0, protein_g: 0, carbs_g: 0, fat_g: 0, fiber_g: null };
+  const real = { kcal: 100, protein_g: 10, carbs_g: 8, fat_g: 2, fiber_g: 1 };
+  const parsed = parseEstimate(
+    JSON.stringify({
+      ingredients: [
+        { photoIndex: 0, name: "chicken breast, raw", grams: 450, nutrients: real, confidence: 0.7, uncertainty: 0.4 },
+        { photoIndex: 0, name: "onion, raw", grams: 150, nutrients: real, confidence: 0.6 },
+        { photoIndex: 0, name: "potatoes, raw", grams: 300, nutrients: real, confidence: 0.6 },
+        { photoIndex: 0, name: "carrots, raw", grams: 120, nutrients: real, confidence: 0.6 },
+        { photoIndex: 0, name: "S&B Golden Curry sauce mix, 92 g box", grams: 92, nutrients: zeros, confidence: 0.9 },
+        { photoIndex: 1, name: "should be dropped", grams: 10, nutrients: real },
+      ],
+    }),
+    1,
+  );
+  assert.deepEqual(
+    parsed.map((item) => item.name),
+    ["chicken breast, raw", "onion, raw", "potatoes, raw", "carrots, raw", "S&B Golden Curry sauce mix, 92 g box"],
+  );
+  assert.ok(parsed.every((item) => item.photoIndex === 0));
+  assert.equal(parsed[0].uncertainty, 0.4);
+  assert.equal(parsed[1].uncertainty, undefined);
+  assert.equal(parsed[4].nutrients, null);
+});
+
+test("all-zero nutrients are filled from USDA, and a miss is not stored as zero", async () => {
+  const per100 = { kcal: 120, protein_g: 22.5, carbs_g: 0, fat_g: 2.6, fiber_g: null as number | null };
+  const blank = { name: "chicken breast, raw", grams: 200, nutrients: { kcal: 0, protein_g: 0, carbs_g: 0, fat_g: 0, fiber_g: null }, per100g: null };
+  const filled = await fillNutrition(blank, async () => per100);
+  assert.deepEqual(filled.nutrients, { kcal: 240, protein_g: 45, carbs_g: 0, fat_g: 5.2, fiber_g: null });
+  assert.equal(filled.nutrition_missing, undefined);
+  const knownFiber = await fillNutrition(blank, async () => ({ ...per100, fiber_g: 0 }));
+  assert.equal(knownFiber.nutrients?.fiber_g, 0);
+  const fromModel = await fillNutrition(
+    { ...blank, grams: 92, nutrients: null, per100g: { kcal: 374, protein_g: 6, carbs_g: 56, fat_g: 13, fiber_g: 3.3 } },
+    async () => {
+      throw new Error("lookup should not run");
+    },
+  );
+  assert.equal(fromModel.nutrients?.kcal, 344.1);
+  assert.equal(fromModel.nutrients?.fiber_g, 3);
+  const missing = await fillNutrition(blank, async () => null);
+  assert.equal(missing.nutrients, null);
+  assert.equal(missing.nutrition_missing, true);
+
+  process.env.AI_API_KEY = "test-key";
+  const seen: string[] = [];
+  const fetchImpl: typeof fetch = async (_url, init) => {
+    const body = JSON.parse(String(init?.body)) as { messages: Array<{ content: unknown }> };
+    const content = body.messages[0].content as Array<{ image_url?: { detail?: string } }>;
+    const image = content.find((part) => part.image_url);
+    seen.push(image?.image_url?.detail ?? "");
+    return new Response(
+      JSON.stringify({
+        choices: [
+          {
+            message: {
+              content: JSON.stringify({
+                ingredients: [
+                  { photoIndex: 0, name: "chicken breast, raw", grams: 200, nutrients: blank.nutrients, confidence: 0.5 },
+                  { photoIndex: 0, name: "S&B Golden Curry sauce mix, 92 g box", grams: 92, nutrients: { kcal: 344, protein_g: 5.5, carbs_g: 52, fat_g: 12, fiber_g: 3 }, confidence: 0.9 },
+                ],
+              }),
+            },
+          },
+        ],
+      }),
+      { status: 200 },
+    );
+  };
+  const estimated = await estimatePhotos(["/9j/4AAQ"], null, fetchImpl, async () => per100);
+  assert.deepEqual(seen, ["high"]);
+  assert.equal(estimated.length, 2);
+  assert.equal(estimated[0].nutrients?.kcal, 240);
+  assert.equal(estimated[0].nutrients?.fiber_g, null);
+  assert.equal(estimated[1].nutrients?.fiber_g, 3);
+  assert.equal(estimated[1].nutrition_missing, undefined);
+  const helped = await helpRecipe("chicken and curry", undefined, async () => {
+    return new Response(
+      JSON.stringify({
+        choices: [{ message: { content: JSON.stringify({ ingredients: [{ name: "chicken breast, raw", grams: 100, nutrients: blank.nutrients }], questions: [] }) } }],
+      }),
+      { status: 200 },
+    );
+  }, async () => null);
+  assert.equal(helped.ingredients[0].nutrients, null);
+  assert.equal(helped.ingredients[0].nutrition_missing, true);
+  delete process.env.AI_API_KEY;
 });
 
 test("the setup code creates the admin once, and other codes stay invalid", async () => {
