@@ -105,11 +105,13 @@ These routes use the same `AI_API_KEY`, `AI_BASE_URL`, and `AI_MODEL` settings a
 { "photos": ["<base64 jpeg>"], "note": "olive oil on top" }
 ```
 
-Response: `{ "ingredients": [{ "photoIndex": 0, "name", "grams", "nutrients", "confidence" }] }`. At most one ingredient per photo. `confidence` is 0 to 1. Nutrients are for `grams`.
+Response: `{ "ingredients": [{ "photoIndex", "name", "grams", "nutrients", "confidence" }] }`. One photo may return several ingredients. `photoIndex` says which photo each one came from. `confidence` is 0 to 1. Nutrients are for `grams`.
+
+`uncertainty` is optional, 0 to 1, and only present when the model reported how unsure the portion is. `nutrients` is null, and `nutrition_missing` is `true`, when the portion could not be given real calories and macros. That happens when the model sends all-zero calories, protein, carbs, and fat, and neither a per-100 g estimate nor USDA can fill them. A known zero fiber stays `0`. A missing fiber stays `null`. USDA fiber is not turned into 0. All-zero calories and macros are never returned as if they were a real estimate.
 
 `POST /label-scan` with `{ "photo" }` returns `{ "servingSize", "servingsPerContainer", "nutrients" }` per serving. Each nutrient may be null when that line could not be read. One unreadable line does not fail the scan. The scan fails only when every nutrient is unreadable. `fiber_g` is null when fiber is missing, and 0 when the label says 0. `"<1"` (with or without a unit such as `g`) is read as 0.5. `"<0.5"` and `"trace"` are 0. Any other `"<N"` is `N/2`. A trailing `mg` is converted to grams. `g`, `kcal`, and `cal` are stripped.
 
-`POST /recipe-helper` with `{ "description", "messages"? }` returns `{ "ingredients": [{ "name", "grams", "nutrients", "source" }], "questions": ["..."] }`. Nothing is saved until the app posts a recipe. `messages` is an optional list of `{ "role": "user" | "assistant", "content" }`.
+`POST /recipe-helper` with `{ "description", "messages"? }` returns `{ "ingredients": [{ "name", "grams", "nutrients", "source" }], "questions": ["..."] }`. The same nutrition rule applies: all-zero calories and macros are filled from USDA, or `nutrients` is null and `nutrition_missing` is `true`. `source` is `usda` when the server filled the numbers that way. `uncertainty` is optional, the same as on a photo estimate. Nothing is saved until the app posts a recipe. `messages` is an optional list of `{ "role": "user" | "assistant", "content" }`.
 
 ## Recipes
 
