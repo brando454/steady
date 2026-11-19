@@ -24,7 +24,7 @@ import {
   tokenHash,
 } from "./service";
 import { suggestTargets } from "./targets";
-import { estimatePhotos, helpRecipe, jpegDataUrl, scanLabel } from "./vision";
+import { estimatePhotos, helpRecipe, jpegDataUrl, readEstimateFocus, scanLabel } from "./vision";
 
 export type AbblDeps = {
   store: AbblStore;
@@ -253,10 +253,11 @@ export function createAbblRouter(deps: AbblDeps): Router {
     "/estimate",
     asyncRoute(async (req, res) => {
       await requireUser(store, req.get("authorization"));
-      const photos = Array.isArray(req.body?.photos) ? req.body.photos : null;
-      if (!photos || photos.length < 1 || photos.length > 6) throw new HttpError(400, "Send 1 to 6 JPEG photos");
+      const photos = Array.isArray(req.body?.photos) ? req.body.photos : [];
+      const focus = readEstimateFocus(req.body ?? {});
+      if (photos.length > 6 || (photos.length < 1 && !focus)) throw new HttpError(400, "Send 1 to 6 JPEG photos");
       const note = typeof req.body?.note === "string" ? req.body.note.trim().slice(0, 1000) : null;
-      const ingredients = await estimatePhotos(photos.map(jpegDataUrl), note || null, fetchImpl);
+      const ingredients = await estimatePhotos(photos.map(jpegDataUrl), note || null, fetchImpl, undefined, focus);
       res.json({ ingredients });
     }),
   );
@@ -378,7 +379,7 @@ export function createAbblRouter(deps: AbblDeps): Router {
     "/meals",
     asyncRoute(async (req, res) => {
       const user = await requireUser(store, req.get("authorization"));
-      const meta = readMealMeta(req.body ?? {});
+      const meta = readMealMeta(req.body ?? {}, now());
       const items = await itemsFromMealBody(store, user.id, req.body ?? {});
       const meal = await store.insertMeal(user.id, { ...meta, items });
       res.status(201).json({ meal: presentMeal(meal) });
@@ -389,7 +390,7 @@ export function createAbblRouter(deps: AbblDeps): Router {
     "/meals/:id",
     asyncRoute(async (req, res) => {
       const user = await requireUser(store, req.get("authorization"));
-      const meta = readMealMeta(req.body ?? {});
+      const meta = readMealMeta(req.body ?? {}, now());
       const items = await itemsFromMealBody(store, user.id, req.body ?? {});
       const meal = await store.updateMeal(user.id, req.params.id, { ...meta, items });
       if (!meal) throw new HttpError(404, "Meal not found");

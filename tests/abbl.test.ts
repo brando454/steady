@@ -9,7 +9,7 @@ import { parseMacro, readIngredient, scaleIngredient, totalNutrients } from "../
 import { estimatePhotos, fillNutrition, helpRecipe, parseEstimate, parseLabel } from "../src/server/abbl/vision";
 import { createAbblRouter } from "../src/server/abbl/router";
 import { suggestTargets } from "../src/server/abbl/targets";
-import { parseOpenFoodFacts, parseUsdaFoods } from "../src/server/abbl/foods";
+import { parseOpenFoodFacts, parseServingLabel, parseUsdaFoods } from "../src/server/abbl/foods";
 import { HttpError } from "../src/server/util";
 
 const oats = {
@@ -613,6 +613,138 @@ test("ingredient quantity and unit round trip, and grams stay the nutrition amou
     delete process.env.ABBL_ADMIN_SETUP_CODE;
     await server.close();
   }
+});
+
+test("food search keeps household serving sizes", () => {
+  const usda = parseUsdaFoods({
+    foods: [
+      {
+        fdcId: 171413,
+        description: "Oil, olive",
+        dataType: "Foundation",
+        servingSize: 13.5,
+        servingSizeUnit: "g",
+        householdServingFullText: "1 tbsp",
+        foodMeasures: [{ disseminationText: "1 tablespoon", gramWeight: 13.5, measureUnitAbbreviation: "tbsp" }],
+        foodNutrients: [
+          { nutrientId: 1008, value: 884 },
+          { nutrientId: 1003, value: 0 },
+          { nutrientId: 1005, value: 0 },
+          { nutrientId: 1004, value: 100 },
+          { nutrientId: 1079, value: 0 },
+        ],
+      },
+    ],
+  });
+  assert.equal(parseServingLabel("1/2 cup").quantity, 0.5);
+  assert.equal(parseServingLabel("1/2 cup").unit, "cup");
+  assert.equal(usda[0].servings[0].unit, "tbsp");
+  assert.equal(usda[0].servings[0].grams, 13.5);
+  assert.equal(usda[0].servings.some((item) => item.quantity === 1 && item.unit === "tbsp"), true);
+});
+
+test("past days, meal type, and edited items stay as sent", async () => {
+  resetRateLimit();
+  process.env.ABBL_ADMIN_SETUP_CODE = SETUP;
+  const server = await listen(new MemoryAbblStore());
+  try {
+    const admin = await redeem(server.base, SETUP, "Brandon");
+    const auth = { "Content-Type": "application/json", Authorization: `Bearer ${admin.body.token}` };
+    const item = {
+      name: "Olive oil",
+      quantity: 1,
+      unit: "tbsp",
+      grams: 14,
+      edited: true,
+      foodRef: "usda:171413",
+      source: "usda",
+      nutrients: { kcal: 119, protein_g: 0, carbs_g: 0, fat_g: 13.5, fiber_g: 0 },
+    };
+    const created = await json(
+      await fetch(`${server.base}/api/abbl/v1/meals`, {
+        method: "POST",
+        headers: auth,
+        body: JSON.stringify({ date: "2020-05-01", time: "08:15", meal: "breakfast", items: [item] }),
+      }),
+    );
+    assert.equal(created.status, 201);
+    const meal = created.body.meal as { id: string; date: string; meal: string; items: typeof item[] };
+    assert.equal(meal.date, "2020-05-01");
+    assert.equal(meal.meal, "breakfast");
+    assert.equal(meal.items[0].edited, true);
+    assert.equal(meal.items[0].foodRef, "usda:171413");
+    assert.equal(meal.items[0].nutrients.kcal, 119);
+    assert.equal(meal.items[0].quantity, 1);
+    assert.equal(meal.items[0].unit, "tbsp");
+    const day = await json(await fetch(`${server.base}/api/abbl/v1/days/2020-05-01`, { headers: { Authorization: `Bearer ${admin.body.token}` } }));
+    assert.equal((day.body.meals as { id: string }[])[0].id, meal.id);
+    const moved = await json(
+      await fetch(`${server.base}/api/abbl/v1/meals/${meal.id}`, {
+        method: "PUT",
+        headers: auth,
+        body: JSON.stringify({ date: "2024-01-02", time: "19:00", meal: "dinner", items: [item] }),
+      }),
+    );
+    assert.equal((moved.body.meal as { date: string; meal: string }).date, "2024-01-02");
+    assert.equal((moved.body.meal as { meal: string }).meal, "dinner");
+    assert.equal((moved.body.meal as { items: { nutrients: { kcal: number } }[] }).items[0].nutrients.kcal, 119);
+    const future = await json(
+      await fetch(`${server.base}/api/abbl/v1/meals`, {
+        method: "POST",
+        headers: auth,
+        body: JSON.stringify({ date: "2099-01-01", time: "12:00", items: [item] }),
+      }),
+    );
+    assert.equal(future.status, 400);
+    const plain = await json(
+      await fetch(`${server.base}/api/abbl/v1/meals`, {
+        method: "POST",
+        headers: auth,
+        body: JSON.stringify({ date: "2024-01-02", time: "12:00", items: [{ name: "Oats", grams: 40, nutrients: item.nutrients }] }),
+      }),
+    );
+    const plainItem = (plain.body.meal as { items: { edited: boolean; foodRef: string | null }[] }).items[0];
+    assert.equal(plainItem.edited, false);
+    assert.equal(plainItem.foodRef, null);
+  } finally {
+    delete process.env.ABBL_ADMIN_SETUP_CODE;
+    await server.close();
+  }
+});
+
+test("estimate can correct a single item without a new endpoint", async () => {
+  process.env.AI_API_KEY = "test-key";
+  let prompt = "";
+  const fetchImpl: typeof fetch = async (_url, init) => {
+    const body = JSON.parse(String(init?.body)) as { messages: Array<{ content: Array<{ text?: string }> }> };
+    prompt = body.messages[0].content.map((part) => part.text ?? "").join("\n");
+    return new Response(
+      JSON.stringify({
+        choices: [
+          {
+            message: {
+              content: JSON.stringify({
+                ingredients: [
+                  { photoIndex: 0, name: "chicken breast, raw", grams: 180, nutrients: { kcal: 216, protein_g: 40, carbs_g: 0, fat_g: 4.7, fiber_g: 0 }, confidence: 0.4 },
+                  { photoIndex: 0, name: "rice, cooked", grams: 150, nutrients: { kcal: 195, protein_g: 4, carbs_g: 42, fat_g: 0.4, fiber_g: 0.6 }, confidence: 0.5 },
+                ],
+              }),
+            },
+          },
+        ],
+      }),
+      { status: 200 },
+    );
+  };
+  const corrected = await estimatePhotos(["/9j/4AAQ"], null, fetchImpl, async () => null, {
+    target: { name: "chicken", grams: 180 },
+    correction: "that was tofu, not chicken",
+  });
+  assert.match(prompt, /that was tofu, not chicken/);
+  assert.match(prompt, /Return only that item/);
+  assert.equal(corrected.length, 1);
+  assert.match(corrected[0].name, /chicken/);
+  delete process.env.AI_API_KEY;
 });
 
 test("ABBL does not call Nightscout or send email", () => {

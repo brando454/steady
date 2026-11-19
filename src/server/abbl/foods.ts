@@ -1,5 +1,12 @@
 import { HttpError } from "../util";
-import { round1, type Nutrients } from "./nutrients";
+import { INGREDIENT_UNITS, round1, type IngredientUnit, type Nutrients } from "./nutrients";
+
+export type FoodServing = {
+  label: string;
+  grams: number | null;
+  quantity: number | null;
+  unit: IngredientUnit | null;
+};
 
 export type FoodHit = {
   id: string;
@@ -8,6 +15,7 @@ export type FoodHit = {
   restaurant?: string;
   per100g: Nutrients | null;
   serving: { label: string | null; grams: number | null };
+  servings: FoodServing[];
   perServing: Nutrients | null;
 };
 
@@ -54,6 +62,49 @@ function usdaValue(food: Record<string, unknown>, ids: number[]): number | null 
   return null;
 }
 
+const UNIT_WORDS: Record<string, IngredientUnit> = {
+  g: "g",
+  gram: "g",
+  grams: "g",
+  oz: "oz",
+  ounce: "oz",
+  ounces: "oz",
+  cup: "cup",
+  cups: "cup",
+  tbsp: "tbsp",
+  tablespoon: "tbsp",
+  tablespoons: "tbsp",
+  tsp: "tsp",
+  teaspoon: "tsp",
+  teaspoons: "tsp",
+  piece: "piece",
+  pieces: "piece",
+  item: "piece",
+  items: "piece",
+};
+
+function namedUnit(value: string): IngredientUnit | null {
+  const unit = value.trim().toLowerCase().replace(/\.$/, "");
+  return (INGREDIENT_UNITS as readonly string[]).includes(UNIT_WORDS[unit] ?? "") ? (UNIT_WORDS[unit] as IngredientUnit) : null;
+}
+
+function amountOf(text: string): number | null {
+  const fraction = text.match(/^(\d+)\s*\/\s*(\d+)$/);
+  if (fraction) {
+    const whole = Number(fraction[1]);
+    const part = Number(fraction[2]);
+    return part === 0 ? null : whole / part;
+  }
+  return num(text);
+}
+
+/** "2 tbsp" or "1/2 cup" from a household label. */
+export function parseServingLabel(label: string): { quantity: number | null; unit: IngredientUnit | null } {
+  const match = label.trim().toLowerCase().match(/^(\d+\s*\/\s*\d+|\d+(?:\.\d+)?)\s+([a-z]+)\b/);
+  if (!match) return { quantity: null, unit: null };
+  return { quantity: amountOf(match[1]), unit: namedUnit(match[2]) };
+}
+
 function servingGrams(size: unknown, unit: unknown): number | null {
   const amount = num(size);
   if (amount == null || amount <= 0) return null;
@@ -61,6 +112,42 @@ function servingGrams(size: unknown, unit: unknown): number | null {
   if (label === "g" || label === "grm" || label === "gram" || label === "grams" || label === "ml") return amount;
   if (label === "oz" || label === "ounce" || label === "ounces") return round1(amount * 28.3495);
   return null;
+}
+
+function servingEntry(label: string, grams: number | null, quantity: number | null, unit: IngredientUnit | null): FoodServing | null {
+  const text = label.trim();
+  if (!text && grams == null) return null;
+  return { label: text || `${grams} g`, grams, quantity, unit };
+}
+
+function usdaServings(food: Record<string, unknown>, household: string | null, grams: number | null): FoodServing[] {
+  const servings: FoodServing[] = [];
+  const seen = new Set<string>();
+  const add = (entry: FoodServing | null) => {
+    if (!entry) return;
+    const key = `${entry.label}|${entry.grams ?? ""}|${entry.unit ?? ""}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    servings.push(entry);
+  };
+  if (household) {
+    const parsed = parseServingLabel(household);
+    add(servingEntry(household, grams, parsed.quantity, parsed.unit));
+  }
+  const lists = [food.foodMeasures, food.foodPortions].filter(Array.isArray) as unknown[][];
+  for (const list of lists) {
+    for (const item of list) {
+      if (!item || typeof item !== "object") continue;
+      const measure = item as Record<string, unknown>;
+      const unitRecord = measure.measureUnit as { name?: string; abbreviation?: string } | undefined;
+      const unitName = String(measure.measureUnitAbbreviation ?? measure.measureUnitName ?? unitRecord?.abbreviation ?? unitRecord?.name ?? "");
+      const text = String(measure.disseminationText ?? measure.modifier ?? measure.portionDescription ?? "").trim();
+      const parsed = text ? parseServingLabel(text) : { quantity: null, unit: namedUnit(unitName) };
+      const weight = num(measure.gramWeight ?? measure.gram_weight);
+      add(servingEntry(text || (parsed.quantity && parsed.unit ? `${parsed.quantity} ${parsed.unit}` : unitName), weight, parsed.quantity, parsed.unit ?? namedUnit(unitName)));
+    }
+  }
+  return servings;
 }
 
 export function parseUsdaFoods(payload: unknown): FoodHit[] {
@@ -82,12 +169,15 @@ export function parseUsdaFoods(payload: unknown): FoodHit[] {
     const grams = servingGrams(food.servingSize, food.servingSizeUnit);
     const paired = pair(parsed, grams, !branded);
     const description = [food.brandName, food.description].filter((part) => typeof part === "string" && part.trim()).join(" ");
+    const household = typeof food.householdServingFullText === "string" ? food.householdServingFullText : null;
+    const servings = usdaServings(food, household, grams);
     hits.push({
       id: `usda:${food.fdcId}`,
       name: description || "Food",
       source: "usda",
       per100g: paired.per100g,
-      serving: { label: typeof food.householdServingFullText === "string" ? food.householdServingFullText : grams ? `${grams} g` : null, grams },
+      serving: { label: household ?? (grams ? `${grams} g` : servings[0]?.label ?? null), grams: grams ?? servings[0]?.grams ?? null },
+      servings,
       perServing: paired.perServing,
     });
   }
@@ -116,6 +206,7 @@ export function parseOpenFoodFacts(payload: unknown, upc: string): FoodHit | nul
     source: "open_food_facts",
     per100g: paired.per100g,
     serving: { label: servingText, grams },
+    servings: servingText ? [{ label: servingText, grams, ...parseServingLabel(servingText) }] : [],
     perServing: paired.perServing,
   };
 }
@@ -160,6 +251,7 @@ export function parseSpoonacular(payload: unknown): FoodHit[] {
       restaurant: typeof row.restaurantChain === "string" ? row.restaurantChain : undefined,
       per100g: paired.per100g,
       serving: { label: grams ? `${grams} g` : null, grams },
+      servings: grams ? [{ label: `${grams} g`, grams, quantity: grams, unit: "g" }] : [],
       perServing: paired.perServing,
     });
   }

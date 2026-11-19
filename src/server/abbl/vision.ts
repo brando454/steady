@@ -178,28 +178,77 @@ const ESTIMATE_PROMPT = [
   "Do not include medical or dosing advice.",
 ].join("\n");
 
+export type EstimateFocus = {
+  target?: { name: string; grams: number | null };
+  correction?: string;
+};
+
+function focusPrompt(focus: EstimateFocus | null): string {
+  if (!focus) return "";
+  const lines = ["The user is re-estimating one item. Return only that item, not the rest of the meal."];
+  if (focus.target?.name) {
+    lines.push(`Item: ${focus.target.name}${focus.target.grams != null ? `, about ${focus.target.grams} g` : ""}.`);
+  }
+  if (focus.correction) lines.push(`Correction: ${focus.correction}`);
+  return lines.join("\n");
+}
+
+export function readEstimateFocus(body: Record<string, unknown> | null | undefined): EstimateFocus | null {
+  const record = body ?? {};
+  const correction = typeof record.correction === "string" ? record.correction.trim().slice(0, 500) : "";
+  const targetRecord = record.target;
+  let target: EstimateFocus["target"];
+  if (targetRecord != null) {
+    if (!targetRecord || typeof targetRecord !== "object") throw new HttpError(400, "target looks off");
+    const name = typeof (targetRecord as { name?: unknown }).name === "string" ? (targetRecord as { name: string }).name.trim() : "";
+    if (!name || name.length > 120) throw new HttpError(400, "target looks off");
+    const gramsValue = (targetRecord as { grams?: unknown }).grams;
+    let grams: number | null = null;
+    if (gramsValue != null && gramsValue !== "") {
+      const gramsNumber = typeof gramsValue === "number" ? gramsValue : Number(gramsValue);
+      if (!Number.isFinite(gramsNumber) || gramsNumber <= 0) throw new HttpError(400, "target looks off");
+      grams = round1(gramsNumber);
+    }
+    target = { name, grams };
+  }
+  if (!target && !correction) return null;
+  return { ...(target ? { target } : {}), ...(correction ? { correction } : {}) };
+}
+
+export function selectFocused(items: EstimateIngredient[], focus: EstimateFocus | null): EstimateIngredient[] {
+  const name = focus?.target?.name.trim().toLowerCase() ?? "";
+  if (!name) return items;
+  const matched = items.filter((item) => {
+    const label = item.name.toLowerCase();
+    return label.includes(name) || name.includes(label);
+  });
+  return matched.length > 0 ? matched : items;
+}
+
 export async function estimatePhotos(
   photos: string[],
   note: string | null,
   fetchImpl: FetchLike = fetch,
   lookup: NutritionLookup = (name) => usdaPer100g(name, fetchImpl),
+  focus: EstimateFocus | null = null,
 ): Promise<EstimateIngredient[]> {
   const content: unknown[] = [
     {
       type: "text",
-      text: [ESTIMATE_PROMPT, note ? `Note: ${note.slice(0, 1000)}` : "No note was provided."].join("\n"),
+      text: [ESTIMATE_PROMPT, focusPrompt(focus), note ? `Note: ${note.slice(0, 1000)}` : "No note was provided."].filter(Boolean).join("\n"),
     },
     ...photos.map((url) => ({ type: "image_url", image_url: { url, detail: "high" } })),
   ];
   const text = await complete([{ role: "user", content }], fetchImpl);
-  const parsed = parseEstimate(text, photos.length);
-  return Promise.all(
+  const parsed = parseEstimate(text, Math.max(photos.length, 1));
+  const filled = await Promise.all(
     parsed.map(async (item) => {
-      const filled = await fillNutrition(item, lookup);
+      const nutrition = await fillNutrition(item, lookup);
       const { per100g: _per100g, ...rest } = item;
-      return { ...rest, ...filled };
+      return { ...rest, ...nutrition };
     }),
   );
+  return selectFocused(filled, focus);
 }
 
 export function parseLabel(text: string): { servingSize: string | null; servingsPerContainer: number | null; nutrients: LabelNutrients } {
