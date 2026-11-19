@@ -95,14 +95,20 @@ A hit looks like:
 
 `source` is `usda`, `open_food_facts`, or `spoonacular`. Restaurant hits also include `restaurant`. `per100g` or `perServing` is null when the source has no gram weight to convert. Missing fiber stays null.
 
+USDA hits also include `servings`: a list of `{ "label", "grams", "quantity", "unit" }`. `unit` is `g`, `oz`, `cup`, `tbsp`, `tsp`, `piece`, or null. `quantity` is the count in that unit. A tablespoon or a piece is included when the USDA household text or `foodMeasures` / `foodPortions` has a gram weight. `serving` remains the primary household serving for older clients.
+
 ## AI
 
 These routes use the same `AI_API_KEY`, `AI_BASE_URL`, and `AI_MODEL` settings as Steady's meal estimate. If the key is missing, the route returns `503` and Steady's own estimate route is unchanged.
 
-`POST /estimate` accepts up to 6 base64 JPEGs, with or without a `data:image/jpeg;base64,` prefix, plus an optional `note`. The body limit on this route only is 32 MB. Nothing is saved.
+`POST /estimate` accepts up to 6 base64 JPEGs, with or without a `data:image/jpeg;base64,` prefix, plus an optional `note`. The body limit on this route only is 32 MB. Nothing is saved. The same route re-estimates one item: send `target` (`{ "name", "grams"? }`) and/or `correction` (a short string). Photos may be omitted for that correction. The response is still `{ "ingredients": [...] }`, limited to that item. There is no separate re-estimate endpoint.
 
 ```json
 { "photos": ["<base64 jpeg>"], "note": "olive oil on top" }
+```
+
+```json
+{ "photos": ["<base64 jpeg>"], "target": { "name": "chicken", "grams": 180 }, "correction": "that was tofu, not chicken" }
 ```
 
 Response: `{ "ingredients": [{ "photoIndex", "name", "grams", "nutrients", "confidence" }] }`. One photo may return several ingredients. `photoIndex` says which photo each one came from. `confidence` is 0 to 1. Nutrients are for `grams`.
@@ -142,10 +148,10 @@ The response adds `totals` and `perServing`. `perServing` divides those totals b
 
 `GET /days/:date` returns `{ "date", "targets", "meals", "totals" }`.
 
-`POST /meals` and `PUT /meals/:id` take either items or a recipe, plus `date` and `time`:
+`POST /meals` and `PUT /meals/:id` take either items or a recipe, plus `date`, `time`, and an optional `meal`. `date` is any real civil date from `2000-01-01` through the day after the server clock, so a past day is logged the same way as today. `PUT` changes the date, the time, and the meal type. `meal` is `breakfast`, `lunch`, `snack`, `dinner`, or null. Apple Health is updated on the phone, not by this API.
 
 ```json
-{ "date": "2026-11-14", "time": "12:30", "items": [ { "name": "Oats", "grams": 40, "source": "manual", "nutrients": { "kcal": 150, "protein_g": 5, "carbs_g": 27, "fat_g": 3, "fiber_g": null } } ] }
+{ "date": "2024-03-02", "time": "12:30", "meal": "lunch", "items": [ { "name": "Olive oil", "quantity": 1, "unit": "tbsp", "grams": 14, "edited": true, "foodRef": "usda:171413", "source": "usda", "nutrients": { "kcal": 119, "protein_g": 0, "carbs_g": 0, "fat_g": 13.5, "fiber_g": 0 } } ] }
 ```
 
 ```json
@@ -156,7 +162,7 @@ The response adds `totals` and `perServing`. `perServing` divides those totals b
 { "date": "2026-11-14", "time": "18:00", "recipeId": "...", "grams": 325 }
 ```
 
-`servings` scales by `servings / recipe.servings`. `grams` scales by `grams / yieldGrams`, and is rejected when the recipe has no cooked weight. A saved `quantity` scales by that same factor. The logged items are a snapshot, so later recipe edits do not change the day. `DELETE /meals/:id` removes that meal.
+`servings` scales by `servings / recipe.servings`. `grams` scales by `grams / yieldGrams`, and is rejected when the recipe has no cooked weight. A saved `quantity` scales by that same factor. A logged item may include `edited` and `foodRef`. `edited: true` means the client supplied the nutrients, and the server stores them without recomputing. `foodRef` is the USDA or barcode id when the food was swapped. Both are optional; older rows come back with `edited: false` and `foodRef: null`. The logged items are a snapshot, so later recipe edits do not change the day. `DELETE /meals/:id` removes that meal.
 
 A meal has no separate name or note. Item names are stored so the day can be shown again. They are not written to server logs, photos, or Nightscout.
 

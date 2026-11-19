@@ -28,6 +28,8 @@ type IngredientRow = {
   fat_g: number;
   fiber_g: number | null;
   source: string | null;
+  edited?: boolean | null;
+  food_ref?: string | null;
 };
 
 function iso(value: Date | string): string {
@@ -74,6 +76,8 @@ function ingredientOf(row: IngredientRow): Ingredient {
       fiber_g: row.fiber_g == null ? null : Number(row.fiber_g),
     },
     source: row.source,
+    edited: row.edited === true,
+    foodRef: row.food_ref ?? null,
   };
 }
 
@@ -346,7 +350,7 @@ export class PgAbblStore implements AbblStore {
     if (!mealIds.length) return grouped;
     const found = await rows<IngredientRow & { meal_id: string }>(
       this.db,
-      `SELECT meal_id, sort_order, name, quantity, unit, grams, kcal, protein_g, carbs_g, fat_g, fiber_g, source
+      `SELECT meal_id, sort_order, name, quantity, unit, grams, kcal, protein_g, carbs_g, fat_g, fiber_g, source, edited, food_ref
        FROM abbl_meal_items
        WHERE user_id = $1 AND meal_id = ANY($2::uuid[])
        ORDER BY sort_order`,
@@ -361,24 +365,37 @@ export class PgAbblStore implements AbblStore {
   }
 
   async listMeals(userId: string, date: string): Promise<MealRecord[]> {
-    const found = await rows<{ id: string; meal_time: string }>(
+    const found = await rows<{ id: string; meal_time: string; meal: string | null }>(
       this.db,
-      "SELECT id, meal_time FROM abbl_meals WHERE user_id = $1 AND meal_date = $2::date ORDER BY meal_time, created_at",
+      "SELECT id, meal_time, meal FROM abbl_meals WHERE user_id = $1 AND meal_date = $2::date ORDER BY meal_time, created_at",
       [userId, date],
     );
     const items = await this.mealItems(userId, found.map((row) => row.id));
-    return found.map((row) => ({ id: row.id, date, time: row.meal_time, items: (items.get(row.id) ?? []).map(ingredientOf) }));
+    return found.map((row) => ({
+      id: row.id,
+      date,
+      time: row.meal_time,
+      meal: row.meal === "breakfast" || row.meal === "lunch" || row.meal === "snack" || row.meal === "dinner" ? row.meal : null,
+      items: (items.get(row.id) ?? []).map(ingredientOf),
+    }));
   }
 
   async getMeal(userId: string, id: string): Promise<MealRecord | null> {
-    const found = await rows<{ id: string; meal_date: string; meal_time: string }>(
+    const found = await rows<{ id: string; meal_date: string; meal_time: string; meal: string | null }>(
       this.db,
-      "SELECT id, meal_date, meal_time FROM abbl_meals WHERE user_id = $1 AND id = $2",
+      "SELECT id, meal_date, meal_time, meal FROM abbl_meals WHERE user_id = $1 AND id = $2",
       [userId, id],
     );
     if (!found[0]) return null;
     const items = await this.mealItems(userId, [id]);
-    return { id, date: String(found[0].meal_date).slice(0, 10), time: found[0].meal_time, items: (items.get(id) ?? []).map(ingredientOf) };
+    const meal = found[0].meal;
+    return {
+      id,
+      date: String(found[0].meal_date).slice(0, 10),
+      time: found[0].meal_time,
+      meal: meal === "breakfast" || meal === "lunch" || meal === "snack" || meal === "dinner" ? meal : null,
+      items: (items.get(id) ?? []).map(ingredientOf),
+    };
   }
 
   private async writeMealItems(client: Queryable, userId: string, mealId: string, items: Ingredient[]): Promise<void> {
@@ -387,8 +404,8 @@ export class PgAbblStore implements AbblStore {
       const item = items[index];
       await client.query(
         `INSERT INTO abbl_meal_items (
-           id, meal_id, user_id, sort_order, name, quantity, unit, grams, kcal, protein_g, carbs_g, fat_g, fiber_g, source
-         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
+           id, meal_id, user_id, sort_order, name, quantity, unit, grams, kcal, protein_g, carbs_g, fat_g, fiber_g, source, edited, food_ref
+         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)`,
         [
           randomUUID(),
           mealId,
@@ -404,6 +421,8 @@ export class PgAbblStore implements AbblStore {
           item.nutrients.fat_g,
           item.nutrients.fiber_g,
           item.source,
+          item.edited,
+          item.foodRef,
         ],
       );
     }
@@ -412,11 +431,12 @@ export class PgAbblStore implements AbblStore {
   async insertMeal(userId: string, meal: NewMeal): Promise<MealRecord> {
     const id = randomUUID();
     await tx(async (client) => {
-      await client.query("INSERT INTO abbl_meals (id, user_id, meal_date, meal_time) VALUES ($1,$2,$3::date,$4)", [
+      await client.query("INSERT INTO abbl_meals (id, user_id, meal_date, meal_time, meal) VALUES ($1,$2,$3::date,$4,$5)", [
         id,
         userId,
         meal.date,
         meal.time,
+        meal.meal,
       ]);
       await this.writeMealItems(client, userId, id, meal.items);
     });
@@ -427,11 +447,12 @@ export class PgAbblStore implements AbblStore {
     const existing = await this.getMeal(userId, id);
     if (!existing) return null;
     await tx(async (client) => {
-      await client.query("UPDATE abbl_meals SET meal_date = $3::date, meal_time = $4 WHERE user_id = $1 AND id = $2", [
+      await client.query("UPDATE abbl_meals SET meal_date = $3::date, meal_time = $4, meal = $5 WHERE user_id = $1 AND id = $2", [
         userId,
         id,
         meal.date,
         meal.time,
+        meal.meal,
       ]);
       await this.writeMealItems(client, userId, id, meal.items);
     });

@@ -74,6 +74,7 @@ CREATE TABLE IF NOT EXISTS abbl_meals (
   user_id uuid NOT NULL REFERENCES abbl_users(id),
   meal_date date NOT NULL,
   meal_time text NOT NULL,
+  meal text,
   created_at timestamptz NOT NULL DEFAULT now()
 );
 
@@ -91,13 +92,18 @@ CREATE TABLE IF NOT EXISTS abbl_meal_items (
   carbs_g numeric NOT NULL,
   fat_g numeric NOT NULL,
   fiber_g numeric,
-  source text
+  source text,
+  edited boolean NOT NULL DEFAULT false,
+  food_ref text
 );
 
 ALTER TABLE abbl_recipe_ingredients ADD COLUMN IF NOT EXISTS quantity numeric;
 ALTER TABLE abbl_recipe_ingredients ADD COLUMN IF NOT EXISTS unit text;
 ALTER TABLE abbl_meal_items ADD COLUMN IF NOT EXISTS quantity numeric;
 ALTER TABLE abbl_meal_items ADD COLUMN IF NOT EXISTS unit text;
+ALTER TABLE abbl_meals ADD COLUMN IF NOT EXISTS meal text;
+ALTER TABLE abbl_meal_items ADD COLUMN IF NOT EXISTS edited boolean NOT NULL DEFAULT false;
+ALTER TABLE abbl_meal_items ADD COLUMN IF NOT EXISTS food_ref text;
 
 CREATE INDEX IF NOT EXISTS abbl_invites_user_idx ON abbl_invites (user_id);
 CREATE INDEX IF NOT EXISTS abbl_tokens_user_idx ON abbl_tokens (user_id);

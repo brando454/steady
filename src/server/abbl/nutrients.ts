@@ -14,6 +14,9 @@ export type NutrientTotal = Nutrients & { fiber_unknown: boolean };
 export const INGREDIENT_UNITS = ["g", "oz", "cup", "tbsp", "tsp", "piece"] as const;
 export type IngredientUnit = (typeof INGREDIENT_UNITS)[number];
 
+export const MEAL_TYPES = ["breakfast", "lunch", "snack", "dinner"] as const;
+export type MealType = (typeof MEAL_TYPES)[number];
+
 export type Ingredient = {
   name: string;
   quantity: number | null;
@@ -21,6 +24,10 @@ export type Ingredient = {
   grams: number;
   nutrients: Nutrients;
   source: string | null;
+  /** True when the client edited this logged item. Nutrients are stored as sent. */
+  edited: boolean;
+  /** USDA or barcode id when the client swapped the food. */
+  foodRef: string | null;
 };
 
 export function round1(value: number): number {
@@ -184,7 +191,23 @@ export function readIngredient(value: unknown): Ingredient {
     grams,
     nutrients: readNutrients(record.nutrients),
     source,
+    edited: readEdited(record.edited),
+    foodRef: readFoodRef(record.foodRef),
   };
+}
+
+function readEdited(value: unknown): boolean {
+  if (value == null || value === false) return false;
+  if (value === true) return true;
+  throw new HttpError(400, "edited looks off");
+}
+
+function readFoodRef(value: unknown): string | null {
+  if (value == null || value === "") return null;
+  if (typeof value !== "string") throw new HttpError(400, "foodRef looks off");
+  const ref = value.trim();
+  if (!ref || ref.length > 80) throw new HttpError(400, "foodRef looks off");
+  return ref;
 }
 
 export function scaleIngredient(ingredient: Ingredient, factor: number): Ingredient {
@@ -195,5 +218,7 @@ export function scaleIngredient(ingredient: Ingredient, factor: number): Ingredi
     grams: round1(ingredient.grams * factor),
     nutrients: scaleNutrients(ingredient.nutrients, factor),
     source: ingredient.source,
+    edited: ingredient.edited,
+    foodRef: ingredient.foodRef,
   };
 }

@@ -1,4 +1,4 @@
-import type { Ingredient, Nutrients } from "./nutrients";
+import type { Ingredient, MealType, Nutrients } from "./nutrients";
 
 export type AbblUser = {
   id: string;
@@ -51,6 +51,7 @@ export type MealRecord = {
   id: string;
   date: string;
   time: string;
+  meal: MealType | null;
   items: Ingredient[];
 };
 

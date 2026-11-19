@@ -1,7 +1,7 @@
 import { createHash, randomBytes, randomInt } from "crypto";
 import { secretsMatch } from "../auth";
 import { HttpError, cleanText, readDate } from "../util";
-import { perServing, readIngredient, scaleIngredient, totalNutrients, type Ingredient } from "./nutrients";
+import { MEAL_TYPES, perServing, readIngredient, scaleIngredient, totalNutrients, type Ingredient, type MealType } from "./nutrients";
 import type { AbblStore, AbblUser, InviteRecord, InviteStatus, MealRecord, NewRecipe, RecipeRecord } from "./records";
 
 export const INVITE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
@@ -90,7 +90,7 @@ export function presentRecipe(recipe: RecipeRecord) {
 
 export function presentMeal(meal: MealRecord) {
   const totals = totalNutrients(meal.items.map((item) => item.nutrients));
-  return { id: meal.id, date: meal.date, time: meal.time, items: meal.items, totals };
+  return { id: meal.id, date: meal.date, time: meal.time, meal: meal.meal, items: meal.items, totals };
 }
 
 export function readRecipeBody(body: Record<string, unknown>): NewRecipe {
@@ -113,6 +113,25 @@ export function readRecipeBody(body: Record<string, unknown>): NewRecipe {
 export function readTime(value: unknown): string {
   if (typeof value !== "string" || !/^([01]\d|2[0-3]):[0-5]\d$/.test(value)) throw new HttpError(400, "Pick a time");
   return value;
+}
+
+/** Any real civil date from 2000-01-01 through the day after `now`. Past days are allowed. */
+export function readLoggedDate(value: unknown, now: Date): string {
+  const date = readDate(value);
+  const [year, month, day] = date.split("-").map(Number);
+  const check = new Date(Date.UTC(year, month - 1, day));
+  const real = check.getUTCFullYear() === year && check.getUTCMonth() === month - 1 && check.getUTCDate() === day;
+  const latest = new Date(now.getTime() + 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+  if (!real || date < "2000-01-01" || date > latest) throw new HttpError(400, "Pick a date");
+  return date;
+}
+
+export function readMealType(value: unknown): MealType | null {
+  if (value == null || value === "") return null;
+  if (typeof value !== "string") throw new HttpError(400, "meal looks off");
+  const meal = value.trim().toLowerCase();
+  if (!(MEAL_TYPES as readonly string[]).includes(meal)) throw new HttpError(400, "meal looks off");
+  return meal as MealType;
 }
 
 export async function itemsFromMealBody(store: AbblStore, userId: string, body: Record<string, unknown>): Promise<Ingredient[]> {
@@ -141,8 +160,8 @@ export async function itemsFromMealBody(store: AbblStore, userId: string, body: 
   return recipe.ingredients.map((item) => scaleIngredient(item, factor));
 }
 
-export function readMealMeta(body: Record<string, unknown>): { date: string; time: string } {
-  return { date: readDate(body.date), time: readTime(body.time) };
+export function readMealMeta(body: Record<string, unknown>, now: Date): { date: string; time: string; meal: MealType | null } {
+  return { date: readLoggedDate(body.date, now), time: readTime(body.time), meal: readMealType(body.meal) };
 }
 
 export async function requireUser(store: AbblStore, header: string | undefined): Promise<AbblUser> {
