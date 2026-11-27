@@ -2,7 +2,7 @@ import { createHash, randomBytes, randomInt } from "crypto";
 import { secretsMatch } from "../auth";
 import { HttpError, cleanText, readDate } from "../util";
 import { MEAL_TYPES, perServing, readIngredient, scaleIngredient, totalNutrients, type Ingredient, type MealType } from "./nutrients";
-import type { AbblStore, AbblUser, InviteRecord, InviteStatus, MealRecord, NewRecipe, RecipeRecord } from "./records";
+import type { AbblStore, AbblUser, InviteRecord, InviteStatus, MealRecord, MealSource, NewRecipe, RecipeRecord } from "./records";
 
 export const INVITE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const INVITE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
@@ -23,6 +23,10 @@ export function tokenHash(token: string): string {
 
 export function newToken(): string {
   return randomBytes(32).toString("base64url");
+}
+
+export function newPrefixedToken(prefix: string): string {
+  return `${prefix}_${randomBytes(32).toString("base64url")}`;
 }
 
 export function setupCodeMatches(presented: string): boolean {
@@ -90,7 +94,21 @@ export function presentRecipe(recipe: RecipeRecord) {
 
 export function presentMeal(meal: MealRecord) {
   const totals = totalNutrients(meal.items.map((item) => item.nutrients));
-  return { id: meal.id, date: meal.date, time: meal.time, meal: meal.meal, items: meal.items, totals };
+  return {
+    id: meal.id,
+    date: meal.date,
+    time: meal.time,
+    meal: meal.meal,
+    name: meal.name,
+    note: meal.note,
+    source: meal.source,
+    items: meal.items,
+    totals,
+  };
+}
+
+export function presentDeletedMeal(meal: MealRecord) {
+  return { ...presentMeal(meal), deletedAt: meal.deletedAt };
 }
 
 export function readRecipeBody(body: Record<string, unknown>): NewRecipe {
@@ -134,6 +152,57 @@ export function readMealType(value: unknown): MealType | null {
   return meal as MealType;
 }
 
+function optionalMealText(value: unknown, field: string, max: number): string | null {
+  if (value == null || value === "") return null;
+  const text = cleanText(value, field, max, false);
+  return text || null;
+}
+
+export function readMealSource(value: unknown): MealSource {
+  if (value == null || value === "") return { kind: "app", client: null };
+  if (!value || typeof value !== "object") throw new HttpError(400, "source looks off");
+  const record = value as Record<string, unknown>;
+  if (record.kind !== "app" && record.kind !== "ai") throw new HttpError(400, "source looks off");
+  const client = optionalMealText(record.client, "client", 80);
+  if (record.client != null && record.client !== "" && client == null && typeof record.client !== "string") {
+    throw new HttpError(400, "source looks off");
+  }
+  return { kind: record.kind, client };
+}
+
+/** Resolve an invite or the admin setup code to a user. Does not mint a session token. */
+export async function userFromCode(store: AbblStore, code: string, name: string | null, now: Date): Promise<AbblUser> {
+  if (!code.trim()) throw new HttpError(401, "That code is not valid");
+  if (setupCodeMatches(code)) {
+    let admin = await store.findAdmin();
+    if (!admin) {
+      try {
+        admin = await store.createUser({ name: name ?? "Admin", email: null, admin: true });
+      } catch {
+        admin = await store.findAdmin();
+      }
+    } else if (admin.disabled) {
+      await store.enableUser(admin.id);
+      if (name) await store.updateName(admin.id, name);
+      admin = await store.userById(admin.id);
+    } else if (name) {
+      admin = await store.updateName(admin.id, name);
+    }
+    if (!admin) throw new HttpError(401, "That code is not valid");
+    return admin;
+  }
+  const invite = await store.consumeInvite(codeHash(code), now);
+  if (!invite) throw new HttpError(401, "That code is not valid");
+  if (invite.userId) {
+    const existing = await store.userById(invite.userId);
+    if (!existing || existing.disabled) throw new HttpError(403, "This account is disabled");
+    return (name ? await store.updateName(existing.id, name) : existing) ?? existing;
+  }
+  const created = await store.createUser({ name: name ?? invite.name, email: invite.email, admin: false });
+  await store.linkInviteUser(invite.id, created.id);
+  return created;
+}
+
 export async function itemsFromMealBody(store: AbblStore, userId: string, body: Record<string, unknown>): Promise<Ingredient[]> {
   const hasItems = Array.isArray(body.items);
   const hasRecipe = typeof body.recipeId === "string" && body.recipeId.length > 0;
@@ -160,8 +229,22 @@ export async function itemsFromMealBody(store: AbblStore, userId: string, body: 
   return recipe.ingredients.map((item) => scaleIngredient(item, factor));
 }
 
-export function readMealMeta(body: Record<string, unknown>, now: Date): { date: string; time: string; meal: MealType | null } {
-  return { date: readLoggedDate(body.date, now), time: readTime(body.time), meal: readMealType(body.meal) };
+export function readMealMeta(body: Record<string, unknown>, now: Date): {
+  date: string;
+  time: string;
+  meal: MealType | null;
+  name: string | null;
+  note: string | null;
+  source: MealSource;
+} {
+  return {
+    date: readLoggedDate(body.date, now),
+    time: readTime(body.time),
+    meal: readMealType(body.meal),
+    name: optionalMealText(body.name, "name", 120),
+    note: optionalMealText(body.note, "note", 500),
+    source: readMealSource(body.source),
+  };
 }
 
 export async function requireUser(store: AbblStore, header: string | undefined): Promise<AbblUser> {

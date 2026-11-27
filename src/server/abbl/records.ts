@@ -47,12 +47,84 @@ export type RecipeRecord = {
   notes: string | null;
 };
 
+export type MealSource = {
+  kind: "app" | "ai";
+  client: string | null;
+};
+
 export type MealRecord = {
   id: string;
   date: string;
   time: string;
   meal: MealType | null;
+  name: string | null;
+  note: string | null;
+  source: MealSource;
+  deletedAt: string | null;
   items: Ingredient[];
+};
+
+export type OauthClient = {
+  id: string;
+  name: string;
+  redirectUris: string[];
+  createdAt: string;
+};
+
+export type AuthCode = {
+  codeHash: string;
+  clientId: string;
+  userId: string;
+  redirectUri: string;
+  codeChallenge: string;
+  expiresAt: string;
+};
+
+export type OauthConnection = {
+  id: string;
+  userId: string;
+  clientId: string;
+  name: string;
+  createdAt: string;
+  revokedAt: string | null;
+};
+
+export type ApiToken = {
+  id: string;
+  userId: string;
+  tokenHash: string;
+  kind: "pat" | "oauth";
+  name: string;
+  clientId: string | null;
+  connectionId: string | null;
+  expiresAt: string | null;
+  lastUsedAt: string | null;
+  createdAt: string;
+  revokedAt: string | null;
+};
+
+export type RefreshToken = {
+  tokenHash: string;
+  userId: string;
+  clientId: string;
+  connectionId: string;
+  expiresAt: string;
+};
+
+export type CredentialInfo = {
+  id: string;
+  name: string;
+  createdAt: string;
+  lastUsedAt: string | null;
+};
+
+export type McpAudit = {
+  id: string;
+  userId: string;
+  action: "log_meal" | "edit_meal" | "delete_meal";
+  mealId: string | null;
+  clientName: string | null;
+  createdAt: string;
 };
 
 export type NewRecipe = Omit<RecipeRecord, "id">;
@@ -93,9 +165,28 @@ export type AbblStore = {
   deleteRecipe(userId: string, id: string): Promise<boolean>;
   copyRecipe(fromUserId: string, recipeId: string, toUserId: string): Promise<RecipeRecord | null>;
   listMeals(userId: string, date: string): Promise<MealRecord[]>;
+  listMealsBetween(userId: string, start: string, end: string): Promise<MealRecord[]>;
   getMeal(userId: string, id: string): Promise<MealRecord | null>;
   insertMeal(userId: string, meal: NewMeal): Promise<MealRecord>;
   updateMeal(userId: string, id: string, meal: NewMeal): Promise<MealRecord | null>;
-  deleteMeal(userId: string, id: string): Promise<boolean>;
+  deleteMeal(userId: string, id: string, deletedAt: Date): Promise<boolean>;
+  listDeletedMeals(userId: string): Promise<MealRecord[]>;
+  restoreMeal(userId: string, id: string): Promise<MealRecord | null>;
+  purgeDeletedMeals(now: Date): Promise<void>;
+  saveOauthClient(client: OauthClient): Promise<void>;
+  oauthClient(id: string): Promise<OauthClient | null>;
+  saveAuthCode(code: AuthCode): Promise<void>;
+  peekAuthCode(codeHash: string, now: Date): Promise<AuthCode | null>;
+  takeAuthCode(codeHash: string, now: Date): Promise<AuthCode | null>;
+  saveConnection(connection: OauthConnection): Promise<void>;
+  saveApiToken(token: ApiToken): Promise<void>;
+  apiTokenForHash(tokenHash: string, now: Date): Promise<ApiToken | null>;
+  saveRefreshToken(token: RefreshToken): Promise<void>;
+  takeRefreshToken(tokenHash: string, now: Date): Promise<RefreshToken | null>;
+  revokeAccessForConnection(userId: string, connectionId: string): Promise<void>;
+  listCredentials(userId: string): Promise<{ tokens: CredentialInfo[]; connections: CredentialInfo[] }>;
+  revokeCredential(userId: string, id: string): Promise<boolean>;
+  insertAudit(event: Omit<McpAudit, "id" | "createdAt">, createdAt: Date): Promise<void>;
+  listAudits(userId: string): Promise<McpAudit[]>;
   insertSteadyFavorite(entry: Omit<SteadyFavorite, "id">): Promise<SteadyFavorite>;
 };

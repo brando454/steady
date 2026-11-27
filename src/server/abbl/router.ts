@@ -1,6 +1,7 @@
+import { randomUUID } from "crypto";
 import { Router } from "express";
 import { rateLimit } from "../auth";
-import { HttpError } from "../util";
+import { HttpError, cleanText } from "../util";
 import { lookupBarcode, searchRestaurants, searchUsda } from "./foods";
 import { totalNutrients } from "./nutrients";
 import type { AbblStore, AbblUser } from "./records";
@@ -10,8 +11,10 @@ import {
   codeHash,
   itemsFromMealBody,
   newInviteCode,
+  newPrefixedToken,
   newToken,
   presentInvite,
+  presentDeletedMeal,
   presentMeal,
   presentRecipe,
   publicUser,
@@ -20,8 +23,8 @@ import {
   readPersonName,
   readRecipeBody,
   requireUser,
-  setupCodeMatches,
   tokenHash,
+  userFromCode,
 } from "./service";
 import { suggestTargets } from "./targets";
 import { estimatePhotos, helpRecipe, jpegDataUrl, readEstimateFocus, scanLabel } from "./vision";
@@ -72,38 +75,8 @@ export function createAbblRouter(deps: AbblDeps): Router {
       }
       const code = typeof req.body?.code === "string" ? req.body.code : "";
       const name = readPersonName(req.body?.name, false);
-      if (!code.trim()) throw new HttpError(401, "That code is not valid");
-      if (setupCodeMatches(code)) {
-        let admin = await store.findAdmin();
-        if (!admin) {
-          try {
-            admin = await store.createUser({ name: name ?? "Admin", email: null, admin: true });
-          } catch {
-            admin = await store.findAdmin();
-          }
-        } else if (admin.disabled) {
-          await store.enableUser(admin.id);
-          if (name) await store.updateName(admin.id, name);
-          admin = await store.userById(admin.id);
-        } else if (name) {
-          admin = await store.updateName(admin.id, name);
-        }
-        if (!admin) throw new HttpError(401, "That code is not valid");
-        res.json(await issueToken(admin));
-        return;
-      }
-      const invite = await store.consumeInvite(codeHash(code), now());
-      if (!invite) throw new HttpError(401, "That code is not valid");
-      if (invite.userId) {
-        const existing = await store.userById(invite.userId);
-        if (!existing || existing.disabled) throw new HttpError(403, "This account is disabled");
-        const named = name ? await store.updateName(existing.id, name) : existing;
-        res.json(await issueToken(named ?? existing));
-        return;
-      }
-      const created = await store.createUser({ name: name ?? invite.name, email: invite.email, admin: false });
-      await store.linkInviteUser(invite.id, created.id);
-      res.json(await issueToken(created));
+      const user = await userFromCode(store, code, name, now());
+      res.json(await issueToken(user));
     }),
   );
 
@@ -364,6 +337,7 @@ export function createAbblRouter(deps: AbblDeps): Router {
     asyncRoute(async (req, res) => {
       const user = await requireUser(store, req.get("authorization"));
       if (!/^\d{4}-\d{2}-\d{2}$/.test(req.params.date)) throw new HttpError(400, "Pick a date");
+      await store.purgeDeletedMeals(now());
       const meals = await store.listMeals(user.id, req.params.date);
       const totals = totalNutrients(meals.flatMap((meal) => meal.items.map((item) => item.nutrients)));
       res.json({
@@ -381,7 +355,7 @@ export function createAbblRouter(deps: AbblDeps): Router {
       const user = await requireUser(store, req.get("authorization"));
       const meta = readMealMeta(req.body ?? {}, now());
       const items = await itemsFromMealBody(store, user.id, req.body ?? {});
-      const meal = await store.insertMeal(user.id, { ...meta, items });
+      const meal = await store.insertMeal(user.id, { ...meta, deletedAt: null, items });
       res.status(201).json({ meal: presentMeal(meal) });
     }),
   );
@@ -392,7 +366,7 @@ export function createAbblRouter(deps: AbblDeps): Router {
       const user = await requireUser(store, req.get("authorization"));
       const meta = readMealMeta(req.body ?? {}, now());
       const items = await itemsFromMealBody(store, user.id, req.body ?? {});
-      const meal = await store.updateMeal(user.id, req.params.id, { ...meta, items });
+      const meal = await store.updateMeal(user.id, req.params.id, { ...meta, deletedAt: null, items });
       if (!meal) throw new HttpError(404, "Meal not found");
       res.json({ meal: presentMeal(meal) });
     }),
@@ -402,7 +376,72 @@ export function createAbblRouter(deps: AbblDeps): Router {
     "/meals/:id",
     asyncRoute(async (req, res) => {
       const user = await requireUser(store, req.get("authorization"));
-      if (!(await store.deleteMeal(user.id, req.params.id))) throw new HttpError(404, "Meal not found");
+      await store.purgeDeletedMeals(now());
+      if (!(await store.deleteMeal(user.id, req.params.id, now()))) throw new HttpError(404, "Meal not found");
+      res.json({ ok: true });
+    }),
+  );
+
+  router.get(
+    "/meals/deleted",
+    asyncRoute(async (req, res) => {
+      const user = await requireUser(store, req.get("authorization"));
+      await store.purgeDeletedMeals(now());
+      const meals = await store.listDeletedMeals(user.id);
+      res.json({ meals: meals.map(presentDeletedMeal) });
+    }),
+  );
+
+  router.post(
+    "/meals/:id/restore",
+    asyncRoute(async (req, res) => {
+      const user = await requireUser(store, req.get("authorization"));
+      await store.purgeDeletedMeals(now());
+      const meal = await store.restoreMeal(user.id, req.params.id);
+      if (!meal) throw new HttpError(404, "Meal not found");
+      res.json({ meal: presentMeal(meal) });
+    }),
+  );
+
+  router.post(
+    "/tokens",
+    asyncRoute(async (req, res) => {
+      const user = await requireUser(store, req.get("authorization"));
+      const name = cleanText(req.body?.name, "Name", 80);
+      const secret = newPrefixedToken("abbl_pat");
+      const createdAt = now().toISOString();
+      const id = randomUUID();
+      await store.saveApiToken({
+        id,
+        userId: user.id,
+        tokenHash: tokenHash(secret),
+        kind: "pat",
+        name,
+        clientId: null,
+        connectionId: null,
+        expiresAt: null,
+        lastUsedAt: null,
+        createdAt,
+        revokedAt: null,
+      });
+      res.status(201).json({ token: { id, name, token: secret, createdAt } });
+    }),
+  );
+
+  router.get(
+    "/connections",
+    asyncRoute(async (req, res) => {
+      const user = await requireUser(store, req.get("authorization"));
+      res.json(await store.listCredentials(user.id));
+    }),
+  );
+
+  router.delete(
+    "/tokens/:id",
+    asyncRoute(async (req, res) => {
+      const user = await requireUser(store, req.get("authorization"));
+      if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(req.params.id)) throw new HttpError(404, "Connection not found");
+      if (!(await store.revokeCredential(user.id, req.params.id))) throw new HttpError(404, "Connection not found");
       res.json({ ok: true });
     }),
   );

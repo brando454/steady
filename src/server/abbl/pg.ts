@@ -1,7 +1,26 @@
 import { randomUUID } from "crypto";
 import { pool, rows, tx, type Queryable } from "../db";
 import { INGREDIENT_UNITS, type Ingredient, type IngredientUnit, type Nutrients } from "./nutrients";
-import type { AbblStore, AbblUser, InviteRecord, MealRecord, NewInvite, NewMeal, NewRecipe, NewUser, RecipeRecord, SteadyFavorite } from "./records";
+import type {
+  AbblStore,
+  AbblUser,
+  ApiToken,
+  AuthCode,
+  CredentialInfo,
+  InviteRecord,
+  McpAudit,
+  MealRecord,
+  MealSource,
+  NewInvite,
+  NewMeal,
+  NewRecipe,
+  NewUser,
+  OauthClient,
+  OauthConnection,
+  RecipeRecord,
+  RefreshToken,
+  SteadyFavorite,
+} from "./records";
 
 type UserRow = { id: string; name: string; email: string | null; admin: boolean; disabled_at: Date | null };
 type InviteRow = {
@@ -21,7 +40,7 @@ type IngredientRow = {
   name: string;
   quantity: number | null;
   unit: string | null;
-  grams: number;
+  grams: number | null;
   kcal: number;
   protein_g: number;
   carbs_g: number;
@@ -67,7 +86,7 @@ function ingredientOf(row: IngredientRow): Ingredient {
     name: row.name,
     quantity: row.quantity == null ? null : Number(row.quantity),
     unit: ingredientUnit(row.unit),
-    grams: Number(row.grams),
+    grams: row.grams == null ? null : Number(row.grams),
     nutrients: {
       kcal: Number(row.kcal),
       protein_g: Number(row.protein_g),
@@ -78,6 +97,49 @@ function ingredientOf(row: IngredientRow): Ingredient {
     source: row.source,
     edited: row.edited === true,
     foodRef: row.food_ref ?? null,
+  };
+}
+
+type MealRow = {
+  id: string;
+  meal_date?: string | Date;
+  meal_time: string;
+  meal: string | null;
+  name: string | null;
+  note: string | null;
+  source_kind: string | null;
+  source_client: string | null;
+  deleted_at: Date | string | null;
+};
+
+const MEAL_COLUMNS = "id, meal_date, meal_time, meal, name, note, source_kind, source_client, deleted_at";
+
+function civilDate(value: string | Date): string {
+  if (typeof value === "string" && /^\d{4}-\d{2}-\d{2}/.test(value)) return value.slice(0, 10);
+  if (value instanceof Date) {
+    const month = String(value.getMonth() + 1).padStart(2, "0");
+    const day = String(value.getDate()).padStart(2, "0");
+    return `${value.getFullYear()}-${month}-${day}`;
+  }
+  return String(value).slice(0, 10);
+}
+
+function mealSource(kind: string | null, client: string | null): MealSource {
+  return { kind: kind === "ai" ? "ai" : "app", client };
+}
+
+function mealRecord(row: MealRow, date: string, items: Ingredient[]): MealRecord {
+  const meal = row.meal;
+  return {
+    id: row.id,
+    date,
+    time: row.meal_time,
+    meal: meal === "breakfast" || meal === "lunch" || meal === "snack" || meal === "dinner" ? meal : null,
+    name: row.name,
+    note: row.note,
+    source: mealSource(row.source_kind, row.source_client),
+    deletedAt: row.deleted_at == null ? null : iso(row.deleted_at),
+    items,
   };
 }
 
@@ -191,6 +253,9 @@ export class PgAbblStore implements AbblStore {
 
   async revokeUserTokens(userId: string): Promise<void> {
     await this.db.query("UPDATE abbl_tokens SET revoked_at = now() WHERE user_id = $1 AND revoked_at IS NULL", [userId]);
+    await this.db.query("UPDATE abbl_api_tokens SET revoked_at = now() WHERE user_id = $1 AND revoked_at IS NULL", [userId]);
+    await this.db.query("UPDATE abbl_refresh_tokens SET revoked_at = now() WHERE user_id = $1 AND revoked_at IS NULL", [userId]);
+    await this.db.query("UPDATE abbl_oauth_connections SET revoked_at = now() WHERE user_id = $1 AND revoked_at IS NULL", [userId]);
   }
 
   async getTargets(userId: string): Promise<Nutrients | null> {
@@ -365,37 +430,25 @@ export class PgAbblStore implements AbblStore {
   }
 
   async listMeals(userId: string, date: string): Promise<MealRecord[]> {
-    const found = await rows<{ id: string; meal_time: string; meal: string | null }>(
-      this.db,
-      "SELECT id, meal_time, meal FROM abbl_meals WHERE user_id = $1 AND meal_date = $2::date ORDER BY meal_time, created_at",
-      [userId, date],
-    );
+    const meals = await this.mealsWhere(userId, "user_id = $1 AND meal_date = $2::date AND deleted_at IS NULL", [userId, date]);
+    return meals.map((meal) => ({ ...meal, date }));
+  }
+
+  async listMealsBetween(userId: string, start: string, end: string): Promise<MealRecord[]> {
+    return this.mealsWhere(userId, "user_id = $1 AND meal_date BETWEEN $2::date AND $3::date AND deleted_at IS NULL", [userId, start, end]);
+  }
+
+  private async mealsWhere(userId: string, where: string, params: unknown[]): Promise<MealRecord[]> {
+    const found = await rows<MealRow>(this.db, `SELECT ${MEAL_COLUMNS} FROM abbl_meals WHERE ${where} ORDER BY meal_time, created_at`, params);
     const items = await this.mealItems(userId, found.map((row) => row.id));
-    return found.map((row) => ({
-      id: row.id,
-      date,
-      time: row.meal_time,
-      meal: row.meal === "breakfast" || row.meal === "lunch" || row.meal === "snack" || row.meal === "dinner" ? row.meal : null,
-      items: (items.get(row.id) ?? []).map(ingredientOf),
-    }));
+    return found.map((row) => mealRecord(row, row.meal_date == null ? "" : civilDate(row.meal_date), (items.get(row.id) ?? []).map(ingredientOf)));
   }
 
   async getMeal(userId: string, id: string): Promise<MealRecord | null> {
-    const found = await rows<{ id: string; meal_date: string; meal_time: string; meal: string | null }>(
-      this.db,
-      "SELECT id, meal_date, meal_time, meal FROM abbl_meals WHERE user_id = $1 AND id = $2",
-      [userId, id],
-    );
+    const found = await rows<MealRow>(this.db, `SELECT ${MEAL_COLUMNS} FROM abbl_meals WHERE user_id = $1 AND id = $2`, [userId, id]);
     if (!found[0]) return null;
     const items = await this.mealItems(userId, [id]);
-    const meal = found[0].meal;
-    return {
-      id,
-      date: String(found[0].meal_date).slice(0, 10),
-      time: found[0].meal_time,
-      meal: meal === "breakfast" || meal === "lunch" || meal === "snack" || meal === "dinner" ? meal : null,
-      items: (items.get(id) ?? []).map(ingredientOf),
-    };
+    return mealRecord(found[0], found[0].meal_date == null ? "" : civilDate(found[0].meal_date), (items.get(id) ?? []).map(ingredientOf));
   }
 
   private async writeMealItems(client: Queryable, userId: string, mealId: string, items: Ingredient[]): Promise<void> {
@@ -431,13 +484,11 @@ export class PgAbblStore implements AbblStore {
   async insertMeal(userId: string, meal: NewMeal): Promise<MealRecord> {
     const id = randomUUID();
     await tx(async (client) => {
-      await client.query("INSERT INTO abbl_meals (id, user_id, meal_date, meal_time, meal) VALUES ($1,$2,$3::date,$4,$5)", [
-        id,
-        userId,
-        meal.date,
-        meal.time,
-        meal.meal,
-      ]);
+      await client.query(
+        `INSERT INTO abbl_meals (id, user_id, meal_date, meal_time, meal, name, note, source_kind, source_client)
+         VALUES ($1,$2,$3::date,$4,$5,$6,$7,$8,$9)`,
+        [id, userId, meal.date, meal.time, meal.meal, meal.name, meal.note, meal.source.kind, meal.source.client],
+      );
       await this.writeMealItems(client, userId, id, meal.items);
     });
     return { id, ...meal };
@@ -445,23 +496,306 @@ export class PgAbblStore implements AbblStore {
 
   async updateMeal(userId: string, id: string, meal: NewMeal): Promise<MealRecord | null> {
     const existing = await this.getMeal(userId, id);
-    if (!existing) return null;
+    if (!existing || existing.deletedAt) return null;
     await tx(async (client) => {
-      await client.query("UPDATE abbl_meals SET meal_date = $3::date, meal_time = $4, meal = $5 WHERE user_id = $1 AND id = $2", [
-        userId,
-        id,
-        meal.date,
-        meal.time,
-        meal.meal,
-      ]);
+      await client.query(
+        `UPDATE abbl_meals
+         SET meal_date = $3::date, meal_time = $4, meal = $5, name = $6, note = $7, source_kind = $8, source_client = $9
+         WHERE user_id = $1 AND id = $2 AND deleted_at IS NULL`,
+        [userId, id, meal.date, meal.time, meal.meal, meal.name, meal.note, meal.source.kind, meal.source.client],
+      );
       await this.writeMealItems(client, userId, id, meal.items);
     });
     return { id, ...meal };
   }
 
-  async deleteMeal(userId: string, id: string): Promise<boolean> {
-    const result = await this.db.query("DELETE FROM abbl_meals WHERE user_id = $1 AND id = $2", [userId, id]);
+  async deleteMeal(userId: string, id: string, deletedAt: Date): Promise<boolean> {
+    const result = await this.db.query(
+      "UPDATE abbl_meals SET deleted_at = $3 WHERE user_id = $1 AND id = $2 AND deleted_at IS NULL",
+      [userId, id, deletedAt],
+    );
     return (result.rowCount ?? 0) > 0;
+  }
+
+  async listDeletedMeals(userId: string): Promise<MealRecord[]> {
+    const found = await rows<MealRow>(
+      this.db,
+      `SELECT ${MEAL_COLUMNS} FROM abbl_meals WHERE user_id = $1 AND deleted_at IS NOT NULL ORDER BY deleted_at DESC`,
+      [userId],
+    );
+    const items = await this.mealItems(userId, found.map((row) => row.id));
+    return found.map((row) => mealRecord(row, row.meal_date == null ? "" : civilDate(row.meal_date), (items.get(row.id) ?? []).map(ingredientOf)));
+  }
+
+  async restoreMeal(userId: string, id: string): Promise<MealRecord | null> {
+    const result = await this.db.query("UPDATE abbl_meals SET deleted_at = NULL WHERE user_id = $1 AND id = $2 AND deleted_at IS NOT NULL", [
+      userId,
+      id,
+    ]);
+    if ((result.rowCount ?? 0) === 0) return null;
+    return this.getMeal(userId, id);
+  }
+
+  async purgeDeletedMeals(now: Date): Promise<void> {
+    const cutoff = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+    await this.db.query("DELETE FROM abbl_meals WHERE deleted_at IS NOT NULL AND deleted_at < $1", [cutoff]);
+  }
+
+  async saveOauthClient(client: OauthClient): Promise<void> {
+    await this.db.query("INSERT INTO abbl_oauth_clients (id, name, redirect_uris, created_at) VALUES ($1,$2,$3::jsonb,$4)", [
+      client.id,
+      client.name,
+      JSON.stringify(client.redirectUris),
+      client.createdAt,
+    ]);
+  }
+
+  async oauthClient(id: string): Promise<OauthClient | null> {
+    const found = await rows<{ id: string; name: string; redirect_uris: string[]; created_at: Date | string }>(
+      this.db,
+      "SELECT id, name, redirect_uris, created_at FROM abbl_oauth_clients WHERE id = $1",
+      [id],
+    );
+    if (!found[0]) return null;
+    return { id: found[0].id, name: found[0].name, redirectUris: found[0].redirect_uris, createdAt: iso(found[0].created_at) };
+  }
+
+  async saveAuthCode(code: AuthCode): Promise<void> {
+    await this.db.query(
+      "INSERT INTO abbl_oauth_codes (code_hash, client_id, user_id, redirect_uri, code_challenge, expires_at) VALUES ($1,$2,$3,$4,$5,$6)",
+      [code.codeHash, code.clientId, code.userId, code.redirectUri, code.codeChallenge, code.expiresAt],
+    );
+  }
+
+  async peekAuthCode(codeHash: string, now: Date): Promise<AuthCode | null> {
+    const found = await rows<{
+      code_hash: string;
+      client_id: string;
+      user_id: string;
+      redirect_uri: string;
+      code_challenge: string;
+      expires_at: Date | string;
+    }>(
+      this.db,
+      `SELECT code_hash, client_id, user_id, redirect_uri, code_challenge, expires_at
+       FROM abbl_oauth_codes WHERE code_hash = $1 AND used_at IS NULL AND expires_at > $2`,
+      [codeHash, now],
+    );
+    if (!found[0]) return null;
+    return {
+      codeHash: found[0].code_hash,
+      clientId: found[0].client_id,
+      userId: found[0].user_id,
+      redirectUri: found[0].redirect_uri,
+      codeChallenge: found[0].code_challenge,
+      expiresAt: iso(found[0].expires_at),
+    };
+  }
+
+  async takeAuthCode(codeHash: string, now: Date): Promise<AuthCode | null> {
+    const found = await rows<{
+      code_hash: string;
+      client_id: string;
+      user_id: string;
+      redirect_uri: string;
+      code_challenge: string;
+      expires_at: Date | string;
+    }>(
+      this.db,
+      `UPDATE abbl_oauth_codes SET used_at = $2
+       WHERE code_hash = $1 AND used_at IS NULL AND expires_at > $2
+       RETURNING code_hash, client_id, user_id, redirect_uri, code_challenge, expires_at`,
+      [codeHash, now],
+    );
+    if (!found[0]) return null;
+    return {
+      codeHash: found[0].code_hash,
+      clientId: found[0].client_id,
+      userId: found[0].user_id,
+      redirectUri: found[0].redirect_uri,
+      codeChallenge: found[0].code_challenge,
+      expiresAt: iso(found[0].expires_at),
+    };
+  }
+
+  async saveConnection(connection: OauthConnection): Promise<void> {
+    await this.db.query("INSERT INTO abbl_oauth_connections (id, user_id, client_id, name, created_at) VALUES ($1,$2,$3,$4,$5)", [
+      connection.id,
+      connection.userId,
+      connection.clientId,
+      connection.name,
+      connection.createdAt,
+    ]);
+  }
+
+  async saveApiToken(token: ApiToken): Promise<void> {
+    await this.db.query(
+      `INSERT INTO abbl_api_tokens
+         (id, user_id, token_hash, kind, name, client_id, connection_id, expires_at, last_used_at, created_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+      [
+        token.id,
+        token.userId,
+        token.tokenHash,
+        token.kind,
+        token.name,
+        token.clientId,
+        token.connectionId,
+        token.expiresAt,
+        token.lastUsedAt,
+        token.createdAt,
+      ],
+    );
+  }
+
+  async apiTokenForHash(tokenHash: string, now: Date): Promise<ApiToken | null> {
+    const found = await rows<{
+      id: string;
+      user_id: string;
+      token_hash: string;
+      kind: "pat" | "oauth";
+      name: string;
+      client_id: string | null;
+      connection_id: string | null;
+      expires_at: Date | string | null;
+      last_used_at: Date | string | null;
+      created_at: Date | string;
+      revoked_at: Date | string | null;
+    }>(
+      this.db,
+      `UPDATE abbl_api_tokens AS token
+       SET last_used_at = $2
+       WHERE token.token_hash = $1
+         AND token.revoked_at IS NULL
+         AND (token.expires_at IS NULL OR token.expires_at > $2)
+         AND EXISTS (SELECT 1 FROM abbl_users WHERE id = token.user_id AND disabled_at IS NULL)
+         AND (token.connection_id IS NULL OR EXISTS (
+           SELECT 1 FROM abbl_oauth_connections WHERE id = token.connection_id AND revoked_at IS NULL
+         ))
+       RETURNING id, user_id, token_hash, kind, name, client_id, connection_id, expires_at, last_used_at, created_at, revoked_at`,
+      [tokenHash, now],
+    );
+    const row = found[0];
+    if (!row) return null;
+    return {
+      id: row.id,
+      userId: row.user_id,
+      tokenHash: row.token_hash,
+      kind: row.kind,
+      name: row.name,
+      clientId: row.client_id,
+      connectionId: row.connection_id,
+      expiresAt: row.expires_at == null ? null : iso(row.expires_at),
+      lastUsedAt: row.last_used_at == null ? null : iso(row.last_used_at),
+      createdAt: iso(row.created_at),
+      revokedAt: null,
+    };
+  }
+
+  async saveRefreshToken(token: RefreshToken): Promise<void> {
+    await this.db.query(
+      "INSERT INTO abbl_refresh_tokens (token_hash, user_id, client_id, connection_id, expires_at) VALUES ($1,$2,$3,$4,$5)",
+      [token.tokenHash, token.userId, token.clientId, token.connectionId, token.expiresAt],
+    );
+  }
+
+  async takeRefreshToken(tokenHash: string, now: Date): Promise<RefreshToken | null> {
+    const found = await rows<{ token_hash: string; user_id: string; client_id: string; connection_id: string; expires_at: Date | string }>(
+      this.db,
+      `UPDATE abbl_refresh_tokens SET revoked_at = $2
+       WHERE token_hash = $1 AND revoked_at IS NULL AND expires_at > $2
+       RETURNING token_hash, user_id, client_id, connection_id, expires_at`,
+      [tokenHash, now],
+    );
+    if (!found[0]) return null;
+    return {
+      tokenHash: found[0].token_hash,
+      userId: found[0].user_id,
+      clientId: found[0].client_id,
+      connectionId: found[0].connection_id,
+      expiresAt: iso(found[0].expires_at),
+    };
+  }
+
+  async revokeAccessForConnection(userId: string, connectionId: string): Promise<void> {
+    await this.db.query("UPDATE abbl_api_tokens SET revoked_at = now() WHERE user_id = $1 AND connection_id = $2 AND revoked_at IS NULL", [
+      userId,
+      connectionId,
+    ]);
+  }
+
+  async listCredentials(userId: string): Promise<{ tokens: CredentialInfo[]; connections: CredentialInfo[] }> {
+    const tokens = await rows<{ id: string; name: string; created_at: Date | string; last_used_at: Date | string | null }>(
+      this.db,
+      `SELECT id, name, created_at, last_used_at FROM abbl_api_tokens
+       WHERE user_id = $1 AND kind = 'pat' AND revoked_at IS NULL ORDER BY created_at`,
+      [userId],
+    );
+    const connections = await rows<{ id: string; name: string; created_at: Date | string; last_used_at: Date | string | null }>(
+      this.db,
+      `SELECT connection.id, connection.name, connection.created_at,
+              (SELECT max(last_used_at) FROM abbl_api_tokens WHERE connection_id = connection.id) AS last_used_at
+       FROM abbl_oauth_connections connection
+       WHERE connection.user_id = $1 AND connection.revoked_at IS NULL
+       ORDER BY connection.created_at`,
+      [userId],
+    );
+    return {
+      tokens: tokens.map((row) => ({
+        id: row.id,
+        name: row.name,
+        createdAt: iso(row.created_at),
+        lastUsedAt: row.last_used_at == null ? null : iso(row.last_used_at),
+      })),
+      connections: connections.map((row) => ({
+        id: row.id,
+        name: row.name,
+        createdAt: iso(row.created_at),
+        lastUsedAt: row.last_used_at == null ? null : iso(row.last_used_at),
+      })),
+    };
+  }
+
+  async revokeCredential(userId: string, id: string): Promise<boolean> {
+    const token = await this.db.query(
+      "UPDATE abbl_api_tokens SET revoked_at = now() WHERE user_id = $1 AND id = $2 AND kind = 'pat' AND revoked_at IS NULL",
+      [userId, id],
+    );
+    if ((token.rowCount ?? 0) > 0) return true;
+    const connection = await this.db.query(
+      "UPDATE abbl_oauth_connections SET revoked_at = now() WHERE user_id = $1 AND id = $2 AND revoked_at IS NULL",
+      [userId, id],
+    );
+    if ((connection.rowCount ?? 0) === 0) return false;
+    await this.revokeAccessForConnection(userId, id);
+    await this.db.query("UPDATE abbl_refresh_tokens SET revoked_at = now() WHERE user_id = $1 AND connection_id = $2 AND revoked_at IS NULL", [
+      userId,
+      id,
+    ]);
+    return true;
+  }
+
+  async insertAudit(event: Omit<McpAudit, "id" | "createdAt">, createdAt: Date): Promise<void> {
+    await this.db.query(
+      "INSERT INTO abbl_mcp_audit (id, user_id, action, meal_id, client_name, created_at) VALUES ($1,$2,$3,$4,$5,$6)",
+      [randomUUID(), event.userId, event.action, event.mealId, event.clientName, createdAt],
+    );
+  }
+
+  async listAudits(userId: string): Promise<McpAudit[]> {
+    const found = await rows<{ id: string; user_id: string; action: McpAudit["action"]; meal_id: string | null; client_name: string | null; created_at: Date | string }>(
+      this.db,
+      "SELECT id, user_id, action, meal_id, client_name, created_at FROM abbl_mcp_audit WHERE user_id = $1 ORDER BY created_at",
+      [userId],
+    );
+    return found.map((row) => ({
+      id: row.id,
+      userId: row.user_id,
+      action: row.action,
+      mealId: row.meal_id,
+      clientName: row.client_name,
+      createdAt: iso(row.created_at),
+    }));
   }
 
   async insertSteadyFavorite(entry: Omit<SteadyFavorite, "id">): Promise<SteadyFavorite> {
