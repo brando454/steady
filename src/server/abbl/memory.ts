@@ -1,6 +1,24 @@
 import { randomUUID } from "crypto";
 import type { Nutrients } from "./nutrients";
-import type { AbblStore, AbblUser, InviteRecord, MealRecord, NewInvite, NewMeal, NewRecipe, NewUser, RecipeRecord, SteadyFavorite } from "./records";
+import type {
+  AbblStore,
+  AbblUser,
+  ApiToken,
+  AuthCode,
+  CredentialInfo,
+  InviteRecord,
+  McpAudit,
+  MealRecord,
+  NewInvite,
+  NewMeal,
+  NewRecipe,
+  NewUser,
+  OauthClient,
+  OauthConnection,
+  RecipeRecord,
+  RefreshToken,
+  SteadyFavorite,
+} from "./records";
 
 type TokenRow = { userId: string; tokenHash: string; revoked: boolean };
 
@@ -12,6 +30,12 @@ export class MemoryAbblStore implements AbblStore {
   recipes = new Map<string, { userId: string; recipe: RecipeRecord }>();
   meals = new Map<string, { userId: string; meal: MealRecord }>();
   favorites: SteadyFavorite[] = [];
+  oauthClients = new Map<string, OauthClient>();
+  authCodes = new Map<string, AuthCode & { used: boolean }>();
+  connections = new Map<string, OauthConnection>();
+  apiTokens: ApiToken[] = [];
+  refreshTokens: Array<RefreshToken & { revoked: boolean }> = [];
+  audits: McpAudit[] = [];
 
   async findAdmin(): Promise<AbblUser | null> {
     return [...this.users.values()].find((user) => user.admin) ?? null;
@@ -114,6 +138,16 @@ export class MemoryAbblStore implements AbblStore {
     for (const token of this.tokens) {
       if (token.userId === userId) token.revoked = true;
     }
+    const now = new Date().toISOString();
+    for (const token of this.apiTokens) {
+      if (token.userId === userId && !token.revokedAt) token.revokedAt = now;
+    }
+    for (const token of this.refreshTokens) {
+      if (token.userId === userId) token.revoked = true;
+    }
+    for (const connection of this.connections.values()) {
+      if (connection.userId === userId && !connection.revokedAt) connection.revokedAt = now;
+    }
   }
 
   async getTargets(userId: string): Promise<Nutrients | null> {
@@ -169,7 +203,15 @@ export class MemoryAbblStore implements AbblStore {
   }
 
   async listMeals(userId: string, date: string): Promise<MealRecord[]> {
-    return [...this.meals.values()].filter((row) => row.userId === userId && row.meal.date === date).map((row) => row.meal);
+    return [...this.meals.values()]
+      .filter((row) => row.userId === userId && row.meal.date === date && !row.meal.deletedAt)
+      .map((row) => row.meal);
+  }
+
+  async listMealsBetween(userId: string, start: string, end: string): Promise<MealRecord[]> {
+    return [...this.meals.values()]
+      .filter((row) => row.userId === userId && !row.meal.deletedAt && row.meal.date >= start && row.meal.date <= end)
+      .map((row) => row.meal);
   }
 
   async getMeal(userId: string, id: string): Promise<MealRecord | null> {
@@ -186,17 +228,144 @@ export class MemoryAbblStore implements AbblStore {
 
   async updateMeal(userId: string, id: string, meal: NewMeal): Promise<MealRecord | null> {
     const existing = await this.getMeal(userId, id);
-    if (!existing) return null;
-    const saved = { id, ...meal };
+    if (!existing || existing.deletedAt) return null;
+    const saved = { id, ...meal, deletedAt: null };
     this.meals.set(id, { userId, meal: saved });
     return saved;
   }
 
-  async deleteMeal(userId: string, id: string): Promise<boolean> {
+  async deleteMeal(userId: string, id: string, deletedAt: Date): Promise<boolean> {
     const existing = await this.getMeal(userId, id);
-    if (!existing) return false;
-    this.meals.delete(id);
+    if (!existing || existing.deletedAt) return false;
+    existing.deletedAt = deletedAt.toISOString();
     return true;
+  }
+
+  async listDeletedMeals(userId: string): Promise<MealRecord[]> {
+    return [...this.meals.values()]
+      .filter((row) => row.userId === userId && row.meal.deletedAt)
+      .map((row) => row.meal)
+      .sort((a, b) => (b.deletedAt ?? "").localeCompare(a.deletedAt ?? ""));
+  }
+
+  async restoreMeal(userId: string, id: string): Promise<MealRecord | null> {
+    const existing = await this.getMeal(userId, id);
+    if (!existing?.deletedAt) return null;
+    existing.deletedAt = null;
+    return existing;
+  }
+
+  async purgeDeletedMeals(now: Date): Promise<void> {
+    const cutoff = now.getTime() - 30 * 24 * 60 * 60 * 1000;
+    for (const [id, row] of this.meals) {
+      if (row.meal.deletedAt && Date.parse(row.meal.deletedAt) < cutoff) this.meals.delete(id);
+    }
+  }
+
+  async saveOauthClient(client: OauthClient): Promise<void> {
+    this.oauthClients.set(client.id, client);
+  }
+
+  async oauthClient(id: string): Promise<OauthClient | null> {
+    return this.oauthClients.get(id) ?? null;
+  }
+
+  async saveAuthCode(code: AuthCode): Promise<void> {
+    this.authCodes.set(code.codeHash, { ...code, used: false });
+  }
+
+  async peekAuthCode(codeHash: string, now: Date): Promise<AuthCode | null> {
+    const code = this.authCodes.get(codeHash);
+    if (!code || code.used || Date.parse(code.expiresAt) <= now.getTime()) return null;
+    return code;
+  }
+
+  async takeAuthCode(codeHash: string, now: Date): Promise<AuthCode | null> {
+    const code = await this.peekAuthCode(codeHash, now);
+    if (!code) return null;
+    const row = this.authCodes.get(codeHash);
+    if (row) row.used = true;
+    return code;
+  }
+
+  async saveConnection(connection: OauthConnection): Promise<void> {
+    this.connections.set(connection.id, connection);
+  }
+
+  async saveApiToken(token: ApiToken): Promise<void> {
+    this.apiTokens.push(token);
+  }
+
+  async apiTokenForHash(tokenHash: string, now: Date): Promise<ApiToken | null> {
+    const token = this.apiTokens.find((item) => item.tokenHash === tokenHash && !item.revokedAt);
+    if (!token) return null;
+    if (token.expiresAt && Date.parse(token.expiresAt) <= now.getTime()) return null;
+    const user = this.users.get(token.userId);
+    if (!user || user.disabled) return null;
+    if (token.connectionId) {
+      const connection = this.connections.get(token.connectionId);
+      if (!connection || connection.revokedAt) return null;
+    }
+    token.lastUsedAt = now.toISOString();
+    return token;
+  }
+
+  async saveRefreshToken(token: RefreshToken): Promise<void> {
+    this.refreshTokens.push({ ...token, revoked: false });
+  }
+
+  async takeRefreshToken(tokenHash: string, now: Date): Promise<RefreshToken | null> {
+    const token = this.refreshTokens.find((item) => item.tokenHash === tokenHash && !item.revoked);
+    if (!token || Date.parse(token.expiresAt) <= now.getTime()) return null;
+    token.revoked = true;
+    return token;
+  }
+
+  async revokeAccessForConnection(userId: string, connectionId: string): Promise<void> {
+    const now = new Date().toISOString();
+    for (const token of this.apiTokens) {
+      if (token.userId === userId && token.connectionId === connectionId && !token.revokedAt) token.revokedAt = now;
+    }
+  }
+
+  async listCredentials(userId: string): Promise<{ tokens: CredentialInfo[]; connections: CredentialInfo[] }> {
+    const tokens = this.apiTokens
+      .filter((token) => token.userId === userId && token.kind === "pat" && !token.revokedAt)
+      .map((token) => ({ id: token.id, name: token.name, createdAt: token.createdAt, lastUsedAt: token.lastUsedAt }));
+    const connections = [...this.connections.values()]
+      .filter((connection) => connection.userId === userId && !connection.revokedAt)
+      .map((connection) => {
+        const used = this.apiTokens
+          .filter((token) => token.connectionId === connection.id && token.lastUsedAt)
+          .map((token) => token.lastUsedAt as string)
+          .sort();
+        return { id: connection.id, name: connection.name, createdAt: connection.createdAt, lastUsedAt: used.at(-1) ?? null };
+      });
+    return { tokens, connections };
+  }
+
+  async revokeCredential(userId: string, id: string): Promise<boolean> {
+    const token = this.apiTokens.find((item) => item.id === id && item.userId === userId && item.kind === "pat" && !item.revokedAt);
+    if (token) {
+      token.revokedAt = new Date().toISOString();
+      return true;
+    }
+    const connection = this.connections.get(id);
+    if (!connection || connection.userId !== userId || connection.revokedAt) return false;
+    connection.revokedAt = new Date().toISOString();
+    await this.revokeAccessForConnection(userId, id);
+    for (const refresh of this.refreshTokens) {
+      if (refresh.userId === userId && refresh.connectionId === id) refresh.revoked = true;
+    }
+    return true;
+  }
+
+  async insertAudit(event: Omit<McpAudit, "id" | "createdAt">, createdAt: Date): Promise<void> {
+    this.audits.push({ ...event, id: randomUUID(), createdAt: createdAt.toISOString() });
+  }
+
+  async listAudits(userId: string): Promise<McpAudit[]> {
+    return this.audits.filter((event) => event.userId === userId);
   }
 
   async insertSteadyFavorite(entry: Omit<SteadyFavorite, "id">): Promise<SteadyFavorite> {

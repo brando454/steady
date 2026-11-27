@@ -21,7 +21,8 @@ export type Ingredient = {
   name: string;
   quantity: number | null;
   unit: IngredientUnit | null;
-  grams: number;
+  /** Null when the entry is totals only and was not weighed. */
+  grams: number | null;
   nutrients: Nutrients;
   source: string | null;
   /** True when the client edited this logged item. Nutrients are stored as sent. */
@@ -215,7 +216,7 @@ export function scaleIngredient(ingredient: Ingredient, factor: number): Ingredi
     name: ingredient.name,
     quantity: ingredient.quantity == null ? null : round1(ingredient.quantity * factor),
     unit: ingredient.unit,
-    grams: round1(ingredient.grams * factor),
+    grams: ingredient.grams == null ? null : round1(ingredient.grams * factor),
     nutrients: scaleNutrients(ingredient.nutrients, factor),
     source: ingredient.source,
     edited: ingredient.edited,

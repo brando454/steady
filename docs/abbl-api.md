@@ -148,7 +148,7 @@ The response adds `totals` and `perServing`. `perServing` divides those totals b
 
 `GET /days/:date` returns `{ "date", "targets", "meals", "totals" }`.
 
-`POST /meals` and `PUT /meals/:id` take either items or a recipe, plus `date`, `time`, and an optional `meal`. `date` is any real civil date from `2000-01-01` through the day after the server clock, so a past day is logged the same way as today. `PUT` changes the date, the time, and the meal type. `meal` is `breakfast`, `lunch`, `snack`, `dinner`, or null. Apple Health is updated on the phone, not by this API.
+`POST /meals` and `PUT /meals/:id` take either items or a recipe, plus `date`, `time`, and an optional `meal`. `date` is any real civil date from `2000-01-01` through the day after the server clock, so a past day is logged the same way as today. `PUT` changes the date, the time, and the meal type. `meal` is `breakfast`, `lunch`, `snack`, `dinner`, or null. Optional `name` and `note` are stored on the meal. Optional `source` is `{ "kind": "app" | "ai", "client": string | null }`. Omitted source is `{ "kind": "app", "client": null }`. Apple Health is updated on the phone, not by this API.
 
 ```json
 { "date": "2024-03-02", "time": "12:30", "meal": "lunch", "items": [ { "name": "Olive oil", "quantity": 1, "unit": "tbsp", "grams": 14, "edited": true, "foodRef": "usda:171413", "source": "usda", "nutrients": { "kcal": 119, "protein_g": 0, "carbs_g": 0, "fat_g": 13.5, "fiber_g": 0 } } ] }
@@ -162,8 +162,46 @@ The response adds `totals` and `perServing`. `perServing` divides those totals b
 { "date": "2026-11-14", "time": "18:00", "recipeId": "...", "grams": 325 }
 ```
 
-`servings` scales by `servings / recipe.servings`. `grams` scales by `grams / yieldGrams`, and is rejected when the recipe has no cooked weight. A saved `quantity` scales by that same factor. A logged item may include `edited` and `foodRef`. `edited: true` means the client supplied the nutrients, and the server stores them without recomputing. `foodRef` is the USDA or barcode id when the food was swapped. Both are optional; older rows come back with `edited: false` and `foodRef: null`. The logged items are a snapshot, so later recipe edits do not change the day. `DELETE /meals/:id` removes that meal.
+`servings` scales by `servings / recipe.servings`. `grams` scales by `grams / yieldGrams`, and is rejected when the recipe has no cooked weight. A saved `quantity` scales by that same factor. A logged item may include `edited` and `foodRef`. `edited: true` means the client supplied the nutrients, and the server stores them without recomputing. `foodRef` is the USDA or barcode id when the food was swapped. Both are optional; older rows come back with `edited: false` and `foodRef: null`. The logged items are a snapshot, so later recipe edits do not change the day.
 
-A meal has no separate name or note. Item names are stored so the day can be shown again. They are not written to server logs, photos, or Nightscout.
+Each item's `nutrients.fiber_g` is null when fiber is unknown and a number when it is known, including 0. Meal `totals` and day `totals` use the same rule and add `fiber_unknown`. A totals-only meal item may have `grams: null`; the nutrients are the whole entry, not a per-gram amount.
+
+`DELETE /meals/:id` soft-deletes the meal. It leaves day lists and totals immediately. `GET /meals/deleted` returns `{ "meals": [ ...meal, "deletedAt" ] }` for meals deleted in the last 30 days. `POST /meals/:id/restore` puts one back. After 30 days the row is purged.
+
+Meal names and notes are stored on the meal. They are not written to server logs, the audit log, photos, or Nightscout.
 
 Queries always include the caller's `user_id`. One account cannot read or change another's recipes, meals, or targets.
+
+## Connections
+
+The signed-in app creates a personal access token with `POST /tokens` and `{ "name" }`. The response is `{ "token": { "id", "name", "token", "createdAt" } }`. `token` is shown once. It is stored only as a SHA-256 hash.
+
+`GET /connections` returns `{ "tokens": [{ "id", "name", "createdAt", "lastUsedAt" }], "connections": [{ "id", "name", "createdAt", "lastUsedAt" }] }`. `tokens` are personal access tokens. `connections` are OAuth clients that finished sign-in. `DELETE /tokens/:id` revokes either kind. A revoked token cannot call MCP. Disabling a user revokes both.
+
+## MCP
+
+`POST /api/abbl/mcp` is a streamable HTTP MCP endpoint. The body is one JSON-RPC 2.0 message. Send `Accept: application/json, text/event-stream`. A normal response is `application/json`. If the client accepts only `text/event-stream`, the same JSON-RPC message comes back as one `event: message` SSE frame. `GET` is `405` because the server does not push messages. Send `Authorization: Bearer` with a personal access token or an OAuth access token. A session token from `POST /auth/redeem` is not an MCP token.
+
+Discovery:
+
+- `GET /.well-known/oauth-protected-resource`
+- `GET /.well-known/oauth-protected-resource/api/abbl/mcp`
+- `GET /.well-known/oauth-authorization-server`
+
+OAuth is authorization code with PKCE S256. There is no client secret.
+
+- `POST /api/abbl/oauth/register` with `{ "client_name", "redirect_uris", "token_endpoint_auth_method": "none" }`
+- `GET /api/abbl/oauth/authorize` shows an invite-code sign-in
+- `POST /api/abbl/oauth/token` accepts `application/x-www-form-urlencoded` `authorization_code` or `refresh_token`
+
+Access tokens last one hour. Refresh tokens last 30 days and rotate. The authorize form signs in with the same invite code as `POST /auth/redeem`, including the admin setup code.
+
+Tools: `log_meal`, `edit_meal`, `delete_meal`, `list_meals`, `get_totals`.
+
+`log_meal` and `edit_meal` take `date`, optional `time` (`HH:mm`), optional `meal`, optional `name`, optional `note`, and either `items` or `totals` (`kcal`, `protein_g`, `carbs_g`, `fat_g`, `fiber_g`). `edit_meal` also takes `id`. Dates use the same rule as `POST /meals`. MCP writes set `source` to `{ "kind": "ai", "client": "<token or OAuth client name>" }`.
+
+`list_meals` takes `date` and returns `{ "date", "meals", "totals" }`. `get_totals` takes `date` or `start` and `end` and returns `{ "start", "end", "days": [{ "date", "totals" }], "totals" }`. Totals include `fiber_g` and `fiber_unknown`.
+
+Each signed-in user is limited to 60 MCP requests a minute. Rejected sign-ins are limited to 30 a minute per IP. A write (`log_meal`, `edit_meal`, `delete_meal`) adds an audit row with the user, action, meal id, and client name. The meal name and note are not in that row.
+
+Set `ABBL_PUBLIC_URL` to the public origin, such as `https://steady.example.com`, when the request host is not the URL clients use. If it is unset, the server uses the forwarded protocol and host. This value is not a secret. The API does not write to Loop, Nightscout, or HealthKit.
