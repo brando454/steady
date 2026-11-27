@@ -157,6 +157,67 @@ CREATE TABLE IF NOT EXISTS nightscout_deletes (
   nightscout_id text PRIMARY KEY,
   queued_at timestamptz NOT NULL DEFAULT now()
 );
+
+ALTER TABLE sessions ADD COLUMN IF NOT EXISTS source_kind text;
+ALTER TABLE sessions ADD COLUMN IF NOT EXISTS source_client text;
+ALTER TABLE sessions ADD COLUMN IF NOT EXISTS deleted_at timestamptz;
+ALTER TABLE weights ADD COLUMN IF NOT EXISTS note text;
+ALTER TABLE weights ADD COLUMN IF NOT EXISTS source_kind text;
+ALTER TABLE weights ADD COLUMN IF NOT EXISTS source_client text;
+
+CREATE TABLE IF NOT EXISTS steady_oauth_clients (
+  id text PRIMARY KEY,
+  name text NOT NULL,
+  redirect_uris jsonb NOT NULL,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS steady_oauth_codes (
+  code_hash text PRIMARY KEY,
+  client_id text NOT NULL REFERENCES steady_oauth_clients(id),
+  redirect_uri text NOT NULL,
+  code_challenge text NOT NULL,
+  expires_at timestamptz NOT NULL,
+  used_at timestamptz
+);
+
+CREATE TABLE IF NOT EXISTS steady_oauth_connections (
+  id uuid PRIMARY KEY,
+  client_id text NOT NULL REFERENCES steady_oauth_clients(id),
+  name text NOT NULL,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  revoked_at timestamptz
+);
+
+CREATE TABLE IF NOT EXISTS steady_api_tokens (
+  id uuid PRIMARY KEY,
+  token_hash text NOT NULL UNIQUE,
+  kind text NOT NULL,
+  name text NOT NULL,
+  client_id text,
+  connection_id uuid,
+  expires_at timestamptz,
+  last_used_at timestamptz,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  revoked_at timestamptz
+);
+
+CREATE TABLE IF NOT EXISTS steady_refresh_tokens (
+  token_hash text PRIMARY KEY,
+  client_id text NOT NULL,
+  connection_id uuid NOT NULL,
+  expires_at timestamptz NOT NULL,
+  revoked_at timestamptz
+);
+
+CREATE TABLE IF NOT EXISTS steady_mcp_audit (
+  id uuid PRIMARY KEY,
+  action text NOT NULL,
+  target_kind text NOT NULL,
+  target_id uuid,
+  client_name text,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
 `;
 
 export async function migrate(): Promise<void> {

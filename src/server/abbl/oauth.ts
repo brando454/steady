@@ -1,6 +1,7 @@
-import { createHash, randomUUID, timingSafeEqual } from "crypto";
+import { randomUUID } from "crypto";
 import express, { Router, type Request, type Response } from "express";
 import { rateLimit } from "../auth";
+import { authorizationServerMetadata, escapeHtml, pkceEqual, pkceS256, protectedResourceMetadata, publicOrigin, redirectAllowed } from "../oauth-http";
 import { HttpError } from "../util";
 import type { AbblStore, OauthClient } from "./records";
 import { newPrefixedToken, readPersonName, tokenHash, userFromCode } from "./service";
@@ -8,20 +9,13 @@ import { newPrefixedToken, readPersonName, tokenHash, userFromCode } from "./ser
 const ACCESS_SECONDS = 60 * 60;
 const REFRESH_MS = 30 * 24 * 60 * 60 * 1000;
 const CODE_MS = 5 * 60 * 1000;
-const BLOCKED_PROTOCOLS = new Set(["javascript:", "data:", "file:", "blob:", "vbscript:"]);
 
 export type OauthDeps = {
   store: AbblStore;
   now?: () => Date;
 };
 
-export function publicOrigin(req: Request): string {
-  const configured = process.env.ABBL_PUBLIC_URL?.trim().replace(/\/$/, "");
-  if (configured) return configured;
-  const proto = (req.get("x-forwarded-proto") ?? req.protocol).split(",")[0].trim();
-  const host = (req.get("x-forwarded-host") ?? req.get("host") ?? "localhost").split(",")[0].trim();
-  return `${proto}://${host}`;
-}
+export { publicOrigin, redirectAllowed };
 
 export function mcpResource(origin: string): string {
   return `${origin}/api/abbl/mcp`;
@@ -31,50 +25,14 @@ export function oauthMetadata(req: Request): { resource: Record<string, unknown>
   const origin = publicOrigin(req);
   const resource = mcpResource(origin);
   return {
-    resource: {
-      resource,
-      authorization_servers: [origin],
-      bearer_methods_supported: ["header"],
-      scopes_supported: ["meals"],
-    },
-    authorization: {
-      issuer: origin,
-      authorization_endpoint: `${origin}/api/abbl/oauth/authorize`,
-      token_endpoint: `${origin}/api/abbl/oauth/token`,
-      registration_endpoint: `${origin}/api/abbl/oauth/register`,
-      response_types_supported: ["code"],
-      grant_types_supported: ["authorization_code", "refresh_token"],
-      code_challenge_methods_supported: ["S256"],
-      token_endpoint_auth_methods_supported: ["none"],
-      scopes_supported: ["meals"],
-    },
+    resource: protectedResourceMetadata(resource, origin, "meals"),
+    authorization: authorizationServerMetadata(origin, {
+      authorize: `${origin}/api/abbl/oauth/authorize`,
+      token: `${origin}/api/abbl/oauth/token`,
+      register: `${origin}/api/abbl/oauth/register`,
+      scope: "meals",
+    }),
   };
-}
-
-export function redirectAllowed(uri: string): boolean {
-  try {
-    const url = new URL(uri);
-    if (url.username || url.password) return false;
-    if (url.protocol === "https:") return true;
-    if (url.protocol === "http:") return url.hostname === "localhost" || url.hostname === "127.0.0.1" || url.hostname === "[::1]";
-    return Boolean(url.protocol) && !BLOCKED_PROTOCOLS.has(url.protocol);
-  } catch {
-    return false;
-  }
-}
-
-function s256(verifier: string): string {
-  return createHash("sha256").update(verifier).digest("base64url");
-}
-
-function same(leftText: string, rightText: string): boolean {
-  const left = Buffer.from(leftText);
-  const right = Buffer.from(rightText);
-  return left.length === right.length && timingSafeEqual(left, right);
-}
-
-function escapeHtml(value: string): string {
-  return value.replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[char] ?? char);
 }
 
 function field(value: unknown): string {
@@ -230,7 +188,7 @@ export function createOauthRouter(deps: OauthDeps): Router {
         const code = await store.peekAuthCode(tokenHash(field(req.body?.code)), clock);
         const verifier = field(req.body?.code_verifier);
         const redirect = field(req.body?.redirect_uri);
-        const matches = code && code.clientId === client.id && code.redirectUri === redirect && /^[A-Za-z0-9._~-]{43,128}$/.test(verifier) && same(s256(verifier), code.codeChallenge);
+        const matches = code && code.clientId === client.id && code.redirectUri === redirect && /^[A-Za-z0-9._~-]{43,128}$/.test(verifier) && pkceEqual(pkceS256(verifier), code.codeChallenge);
         if (!code || !matches || !(await store.takeAuthCode(tokenHash(field(req.body?.code)), clock))) {
           res.status(400).json({ error: "invalid_grant" });
           return;
