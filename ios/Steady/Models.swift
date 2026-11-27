@@ -513,6 +513,29 @@ struct OkResponse: Codable {
   var ok: Bool
 }
 
+struct SteadyCredential: Codable, Identifiable, Hashable {
+  var id: String
+  var name: String
+  var createdAt: String
+  var lastUsedAt: String?
+}
+
+struct SteadyConnections: Codable {
+  var tokens: [SteadyCredential]
+  var connections: [SteadyCredential]
+}
+
+struct CreatedSteadyToken: Codable {
+  var id: String
+  var name: String
+  var token: String
+  var createdAt: String
+}
+
+struct CreatedTokenResponse: Codable {
+  var token: CreatedSteadyToken
+}
+
 struct APIErrorBody: Codable {
   var error: String?
 }

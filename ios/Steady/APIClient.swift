@@ -113,6 +113,14 @@ final class APIClient {
     return try await send("POST", "/api/weights", body: body)
   }
   func glucose() async throws -> Glucose { try await send("GET", "/api/glucose") }
+  func steadyConnections() async throws -> SteadyConnections { try await send("GET", "/api/steady/connections") }
+  func createSteadyToken(name: String) async throws -> CreatedSteadyToken {
+    let response: CreatedTokenResponse = try await send("POST", "/api/steady/tokens", body: ["name": AnyEncodable(name)])
+    return response.token
+  }
+  func revokeSteadyToken(_ id: String) async throws {
+    let _: OkResponse = try await send("DELETE", "/api/steady/tokens/\(enc(id))")
+  }
 
   func sendRaw(method: String, path: String, body: Data?) async throws -> (Data, Int) {
     try await request(method: method, path: path, body: body, timeout: 30, auth: true)

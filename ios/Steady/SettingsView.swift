@@ -19,6 +19,19 @@ struct SettingsView: View {
   var body: some View {
     NavigationStack {
       Form {
+        Section("AI access") {
+          NavigationLink {
+            McpAccessView()
+          } label: {
+            VStack(alignment: .leading, spacing: 6) {
+              Text("MCP connector")
+              Text("Tokens for Claude, ChatGPT, and other tools")
+                .font(.system(size: 13))
+                .foregroundStyle(Theme.muted)
+            }
+            .padding(.vertical, 6)
+          }
+        }
         Section("Nightscout") {
           Text(nightscout)
             .font(.system(size: 15))
