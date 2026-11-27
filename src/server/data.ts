@@ -293,7 +293,7 @@ export async function getWeek(): Promise<WeekDTO> {
   );
   const sessions = await rows<SessionMarkRow>(
     pool,
-    "SELECT id, day_id, week_start, completed_at, started_at FROM sessions WHERE week_start = $1",
+    "SELECT id, day_id, week_start, completed_at, started_at FROM sessions WHERE week_start = $1 AND deleted_at IS NULL",
     [weekStart],
   );
   const statuses = weekDayStatuses(
@@ -429,6 +429,7 @@ export async function getToday(): Promise<TodayDTO> {
     `SELECT id, day_id
      FROM sessions
      WHERE completed_at IS NOT NULL
+       AND deleted_at IS NULL
        AND (completed_at AT TIME ZONE 'America/Boise')::date = $1::date
      ORDER BY completed_at DESC`,
     [today],
@@ -603,7 +604,7 @@ export async function getSession(id: string): Promise<SessionDTO | null> {
     completed_at: Date | null;
     week_start: string;
     glucose_summary: unknown;
-  }>(pool, "SELECT id, day_id, name, started_at, completed_at, week_start, glucose_summary FROM sessions WHERE id = $1", [id]);
+  }>(pool, "SELECT id, day_id, name, started_at, completed_at, week_start, glucose_summary FROM sessions WHERE id = $1 AND deleted_at IS NULL", [id]);
   const session = sessions[0];
   if (!session) return null;
   const exercises = await rows<SxRow>(
@@ -723,10 +724,23 @@ async function requireSession(id: string): Promise<SessionDTO> {
   return session;
 }
 
+export async function refreshPrs(exerciseIds: string[]): Promise<void> {
+  const unique = [...new Set(exerciseIds)];
+  if (!unique.length) return;
+  await tx(async (client) => {
+    for (const exerciseId of unique) await recomputePrs(client, exerciseId);
+  });
+}
+
 async function recomputePrs(client: Queryable, exerciseId: string): Promise<void> {
   const logged = await rows<{ id: string; weight_lb: number | null; reps: number | null }>(
     client,
-    "SELECT id, weight_lb, reps FROM sets WHERE exercise_id = $1 AND logged_at IS NOT NULL ORDER BY logged_at, set_index",
+    `SELECT s.id, s.weight_lb, s.reps
+     FROM sets s
+     JOIN session_exercises sx ON sx.id = s.session_exercise_id
+     JOIN sessions sess ON sess.id = sx.session_id
+     WHERE s.exercise_id = $1 AND s.logged_at IS NOT NULL AND sess.deleted_at IS NULL
+     ORDER BY s.logged_at, s.set_index`,
     [exerciseId],
   );
   const annotated = annotatePrs(
@@ -743,7 +757,7 @@ export async function startSession(dayId: string): Promise<SessionDTO> {
     const existing = await rows<{ id: string }>(
       client,
       `SELECT id FROM sessions
-       WHERE day_id = $1 AND week_start = $2 AND completed_at IS NULL
+       WHERE day_id = $1 AND week_start = $2 AND completed_at IS NULL AND deleted_at IS NULL
        ORDER BY started_at DESC LIMIT 1`,
       [dayId, weekStart],
     );
@@ -833,7 +847,7 @@ async function openSet(client: Queryable, setId: string) {
      FROM sets s
      JOIN session_exercises sx ON sx.id = s.session_exercise_id
      JOIN sessions sess ON sess.id = sx.session_id
-     WHERE s.id = $1`,
+     WHERE s.id = $1 AND sess.deleted_at IS NULL`,
     [setId],
   );
   if (!found[0]) throw new HttpError(404, "Set not found");
@@ -946,7 +960,7 @@ async function supersetMembers(client: Queryable, sessionId: string, sxId: strin
      FROM session_exercises sx
      JOIN exercises e ON e.id = sx.exercise_id
      JOIN sessions sess ON sess.id = sx.session_id
-     WHERE sx.id = $1 AND sx.session_id = $2`,
+     WHERE sx.id = $1 AND sx.session_id = $2 AND sess.deleted_at IS NULL`,
     [sxId, sessionId],
   );
   const exercise = found[0];
@@ -959,7 +973,7 @@ async function supersetMembers(client: Queryable, sessionId: string, sxId: strin
      FROM session_exercises sx
      JOIN exercises e ON e.id = sx.exercise_id
      JOIN sessions sess ON sess.id = sx.session_id
-     WHERE sx.session_id = $1 AND sx.superset_group = $2
+     WHERE sx.session_id = $1 AND sx.superset_group = $2 AND sess.deleted_at IS NULL
      ORDER BY sx.superset_order, sx.sort_order`,
     [sessionId, exercise.superset_group],
   );
@@ -1057,7 +1071,7 @@ export async function addSet(sxId: string): Promise<SessionDTO> {
        FROM session_exercises sx
        JOIN exercises e ON e.id = sx.exercise_id
        JOIN sessions sess ON sess.id = sx.session_id
-       WHERE sx.id = $1`,
+       WHERE sx.id = $1 AND sess.deleted_at IS NULL`,
       [sxId],
     );
     const exercise = sx[0] as (SxRow & { completed_at?: Date | null }) | undefined;
@@ -1126,7 +1140,7 @@ export async function swapExercise(sessionId: string, body: Record<string, unkno
        FROM session_exercises sx
        JOIN exercises e ON e.id = sx.exercise_id
        JOIN sessions sess ON sess.id = sx.session_id
-       WHERE sx.id = $1 AND sx.session_id = $2`,
+       WHERE sx.id = $1 AND sx.session_id = $2 AND sess.deleted_at IS NULL`,
       [sxId, sessionId],
     );
     const exercise = current[0];
@@ -1234,7 +1248,7 @@ async function exerciseScope(client: Queryable, sessionId: string, sxId: string,
      FROM session_exercises sx
      JOIN exercises e ON e.id = sx.exercise_id
      JOIN sessions sess ON sess.id = sx.session_id
-     WHERE sx.id = $1 AND sx.session_id = $2`,
+     WHERE sx.id = $1 AND sx.session_id = $2 AND sess.deleted_at IS NULL`,
     [sxId, sessionId],
   );
   const exercise = found[0];
@@ -1247,7 +1261,7 @@ async function exerciseScope(client: Queryable, sessionId: string, sxId: string,
      FROM session_exercises sx
      JOIN exercises e ON e.id = sx.exercise_id
      JOIN sessions sess ON sess.id = sx.session_id
-     WHERE sx.session_id = $1 AND sx.superset_group = $2
+     WHERE sx.session_id = $1 AND sx.superset_group = $2 AND sess.deleted_at IS NULL
      ORDER BY sx.superset_order, sx.sort_order`,
     [sessionId, exercise.superset_group],
   );
@@ -1334,9 +1348,9 @@ export async function finishSession(id: string): Promise<SessionDTO> {
     if (Number(logged[0]?.n ?? 0) < 1 && Number(touched[0]?.n ?? 0) < 1) {
       throw new HttpError(400, "Log a set before finishing");
     }
-    const updated = await client.query("UPDATE sessions SET completed_at = now() WHERE id = $1 AND completed_at IS NULL", [id]);
+    const updated = await client.query("UPDATE sessions SET completed_at = now() WHERE id = $1 AND completed_at IS NULL AND deleted_at IS NULL", [id]);
     if (updated.rowCount === 0) {
-      const exists = await rows<{ id: string }>(client, "SELECT id FROM sessions WHERE id = $1", [id]);
+      const exists = await rows<{ id: string }>(client, "SELECT id FROM sessions WHERE id = $1 AND deleted_at IS NULL", [id]);
       if (!exists[0]) throw new HttpError(404, "Workout not found");
     }
   });
@@ -1362,6 +1376,7 @@ export async function listHistory(): Promise<HistoryItem[]> {
              JOIN session_exercises sx ON sx.id = st.session_exercise_id
              WHERE sx.session_id = s.id AND st.is_pr) AS prs
      FROM sessions s
+     WHERE s.deleted_at IS NULL
      ORDER BY s.started_at DESC
      LIMIT 60`,
   );
@@ -1409,7 +1424,7 @@ export async function exerciseHistory(exerciseId: string): Promise<ExerciseHisto
      FROM sets s
      JOIN session_exercises sx ON sx.id = s.session_exercise_id
      JOIN sessions sess ON sess.id = sx.session_id
-     WHERE s.exercise_id = $1 AND s.logged_at IS NOT NULL
+     WHERE s.exercise_id = $1 AND s.logged_at IS NOT NULL AND sess.deleted_at IS NULL
      ORDER BY s.logged_at`,
     [exerciseId],
   );
@@ -1499,7 +1514,7 @@ export async function foodDay(dateInput: unknown): Promise<FoodDayDTO> {
   const workouts = await rows<{ id: string; name: string; started_at: Date }>(
     pool,
     `SELECT id, name, started_at FROM sessions
-     WHERE (started_at AT TIME ZONE 'America/Boise')::date = $1::date
+     WHERE deleted_at IS NULL AND (started_at AT TIME ZONE 'America/Boise')::date = $1::date
      ORDER BY started_at`,
     [date],
   );
@@ -1688,9 +1703,9 @@ export async function saveWeight(body: Record<string, unknown>): Promise<WeightD
   if (weight < 50) throw new HttpError(400, "Weight looks off");
   const at = date === today ? new Date() : wallTimeToUtc(date, "12:00");
   await pool.query(
-    `INSERT INTO weights (id, weighed_on, weight_lb, weighed_at, sample)
-     VALUES ($1, $2, $3, $4, false)
-     ON CONFLICT (weighed_on) DO UPDATE SET weight_lb = EXCLUDED.weight_lb, weighed_at = EXCLUDED.weighed_at, sample = false`,
+    `INSERT INTO weights (id, weighed_on, weight_lb, weighed_at, sample, source_kind, source_client)
+     VALUES ($1, $2, $3, $4, false, 'app', NULL)
+     ON CONFLICT (weighed_on) DO UPDATE SET weight_lb = EXCLUDED.weight_lb, weighed_at = EXCLUDED.weighed_at, sample = false, source_kind = 'app', source_client = NULL`,
     [randomUUID(), date, weight, at],
   );
   return getWeights();
@@ -1731,7 +1746,7 @@ export async function coachReview(from: string, to: string) {
   }>(
     pool,
     `SELECT id, name, started_at, completed_at, glucose_summary FROM sessions
-     WHERE (started_at AT TIME ZONE 'America/Boise')::date BETWEEN $1::date AND $2::date
+     WHERE deleted_at IS NULL AND (started_at AT TIME ZONE 'America/Boise')::date BETWEEN $1::date AND $2::date
      ORDER BY started_at`,
     [from, to],
   );

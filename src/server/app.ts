@@ -4,6 +4,8 @@ import express, { type NextFunction, type Request, type Response } from "express
 import { fileURLToPath } from "url";
 import { attachAbbl } from "./abbl/mount";
 import { PgAbblStore } from "./abbl/pg";
+import { attachSteadyPublic, attachSteadyTokens } from "./steady/mount";
+import { PgSteadyStore } from "./steady/pg-store";
 import { estimateMeal } from "./ai";
 import {
   COOKIE,
@@ -105,6 +107,8 @@ export function createApp(passcode: string) {
     express.json({ limit })(req, res, next);
   });
   attachAbbl(app, { store: new PgAbblStore() });
+  const steady = { store: new PgSteadyStore(), passcode };
+  attachSteadyPublic(app, steady);
 
   app.get("/health", async (_req, res) => {
     try {
@@ -192,6 +196,8 @@ export function createApp(passcode: string) {
     res.setHeader("Cache-Control", "no-store");
     next();
   });
+
+  attachSteadyTokens(app, steady);
 
   app.get("/api/today", asyncRoute(async (_req, res) => res.json(await getToday())));
   app.get("/api/program", asyncRoute(async (_req, res) => res.json(await getProgram())));
