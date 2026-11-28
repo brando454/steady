@@ -111,6 +111,10 @@ export type ProgramExerciseDTO = {
   supersetOrder: number | null;
   swaps: { id: string; name: string }[];
   lastWeightLb: number | null;
+  /** Best set of the previous session, the same line the workout screen shows. Null when there is no history. */
+  lastTime: string | null;
+  lastReps: number | null;
+  lastSessionWeightLb: number | null;
 };
 
 export type ProgramDayDTO = {

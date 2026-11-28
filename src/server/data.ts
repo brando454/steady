@@ -5,6 +5,7 @@ import { dayGlucose, glucoseForMeals } from "./mealGlucose";
 import { removeMealNote, retryNightscoutNotes, syncMealNote } from "./mealNotes";
 import { glucoseForSession, glucoseForSessions } from "./workoutGlucose";
 import { formatPerformance, prescriptionLine } from "../shared/format";
+import { latestLoggedWeight, nextPlannedDay, prefillTarget } from "../shared/targets";
 import { programPreview, type Groupable } from "../shared/superset";
 import {
   annotatePrs,
@@ -345,17 +346,8 @@ export async function getProgram(): Promise<ProgramDTO> {
      ORDER BY pe.day_id, pe.sort_order`,
   );
   const exerciseIds = [...new Set(slots.map((slot) => slot.exercise_id))];
-  const lastWeights = exerciseIds.length
-    ? await rows<{ exercise_id: string; weight_lb: number | null }>(
-        pool,
-        `SELECT DISTINCT ON (exercise_id) exercise_id, weight_lb
-         FROM sets
-         WHERE logged_at IS NOT NULL AND exercise_id = ANY($1::text[])
-         ORDER BY exercise_id, logged_at DESC`,
-        [exerciseIds],
-      )
-    : [];
-  const weightByExercise = new Map(lastWeights.map((row) => [row.exercise_id, num(row.weight_lb)]));
+  const history = await loggedSets(pool, exerciseIds);
+  const weightByExercise = new Map(exerciseIds.map((id) => [id, latestLoggedWeight(stampHistory(history), id)]));
   const subRows = exerciseIds.length
     ? await rows<{ exercise_id: string; substitute_id: string; name: string }>(
         pool,
@@ -382,27 +374,135 @@ export async function getProgram(): Promise<ProgramDTO> {
       sortOrder: day.sort_order,
       exercises: slots
         .filter((slot) => slot.day_id === day.id)
-        .map((slot) => ({
-          programExerciseId: slot.id,
-          exerciseId: slot.exercise_id,
-          name: slot.name,
-          patternLabel: slot.pattern_label,
-          muscles: slot.muscles,
-          sortOrder: slot.sort_order,
-          sets: slot.sets,
-          repsLabel: slot.reps_label,
-          repCount: slot.rep_count,
-          measure: slot.measure,
-          perSide: slot.per_side,
-          notes: slot.notes,
-          isCardio: slot.is_cardio,
-          cardioMin: slot.cardio_min,
-          supersetGroup: slot.superset_group,
-          supersetOrder: slot.superset_order,
-          swaps: swapsFor(slot.exercise_id, slot.pattern_key, explicit, catalog),
-          lastWeightLb: weightByExercise.get(slot.exercise_id) ?? null,
-        })),
+        .map((slot) => {
+          const copy = historyCopy(history, slot.exercise_id, slot.measure, slot.per_side, "");
+          return {
+            programExerciseId: slot.id,
+            exerciseId: slot.exercise_id,
+            name: slot.name,
+            patternLabel: slot.pattern_label,
+            muscles: slot.muscles,
+            sortOrder: slot.sort_order,
+            sets: slot.sets,
+            repsLabel: slot.reps_label,
+            repCount: slot.rep_count,
+            measure: slot.measure,
+            perSide: slot.per_side,
+            notes: slot.notes,
+            isCardio: slot.is_cardio,
+            cardioMin: slot.cardio_min,
+            supersetGroup: slot.superset_group,
+            supersetOrder: slot.superset_order,
+            swaps: swapsFor(slot.exercise_id, slot.pattern_key, explicit, catalog),
+            lastWeightLb: weightByExercise.get(slot.exercise_id) ?? null,
+            lastTime: copy.lastTime === "—" ? null : copy.lastTime,
+            lastReps: copy.lastReps,
+            lastSessionWeightLb: copy.lastSessionWeightLb,
+          };
+        }),
     })),
+  };
+}
+
+export type NextWorkoutTarget = {
+  date: string;
+  weekStart: string;
+  dayId: string;
+  name: string;
+  summary: string;
+  sessionId: string | null;
+  wrapped: boolean;
+  exercises: {
+    exerciseId: string;
+    name: string;
+    targetSets: number;
+    targetWeightLb: number | null;
+    targetReps: number | null;
+    repsLabel: string;
+    measure: string;
+    perSide: boolean;
+    isCardio: boolean;
+    cardioMin: number | null;
+    notes: string | null;
+    lastTime: string | null;
+    lastWeightLb: number | null;
+    lastReps: number | null;
+  }[];
+};
+
+/** Targets for the next planned day, using the same prefill a new session would write. */
+export async function nextWorkoutTargets(asOf: string): Promise<NextWorkoutTarget | null> {
+  const weekStart = weekStartCivil(asOf);
+  const days = await rows<DayRow>(pool, "SELECT id, name, summary, sort_order FROM program_days ORDER BY sort_order");
+  if (!days.length) return null;
+  const sessions = await rows<{ id: string; day_id: string; week_start: string | Date; completed_at: Date | null }>(
+    pool,
+    "SELECT id, day_id, week_start, completed_at FROM sessions WHERE week_start = $1 AND deleted_at IS NULL AND day_id IS NOT NULL",
+    [weekStart],
+  );
+  const choice = nextPlannedDay(
+    days.map((day) => day.id),
+    weekDayStatuses(
+      days.map((day) => day.id),
+      sessions.map((session) => ({
+        dayId: session.day_id,
+        weekStart: dateOnly(session.week_start),
+        completed: Boolean(session.completed_at),
+      })),
+      weekStart,
+    ),
+  );
+  if (!choice) return null;
+  const day = days.find((item) => item.id === choice.dayId) ?? days[0];
+  const open = choice.wrapped ? undefined : sessions.find((session) => session.day_id === day.id && !session.completed_at);
+  const slots = await rows<SlotRow>(
+    pool,
+    `SELECT pe.*, e.name, e.pattern_key, e.pattern_label, e.muscles
+     FROM program_exercises pe JOIN exercises e ON e.id = pe.exercise_id
+     WHERE pe.day_id = $1 ORDER BY pe.sort_order`,
+    [day.id],
+  );
+  const history = await loggedSets(pool, slots.map((slot) => slot.exercise_id));
+  const stamped = stampHistory(history);
+  const session = open ? await getSession(open.id) : null;
+  return {
+    date: asOf,
+    weekStart: choice.wrapped ? addDays(weekStart, 7) : weekStart,
+    dayId: day.id,
+    name: day.name,
+    summary: day.summary,
+    sessionId: open?.id ?? null,
+    wrapped: choice.wrapped,
+    exercises: slots.map((slot) => {
+      const copy = historyCopy(history, slot.exercise_id, slot.measure, slot.per_side, open?.id ?? "");
+      const live = session?.exercises.find((exercise) => exercise.exerciseId === slot.exercise_id);
+      const openSet = live?.sets.find((set) => set.loggedAt == null && !set.skipped) ?? live?.sets[0];
+      const filled = prefillTarget({
+        isCardio: slot.is_cardio,
+        sets: live?.setsPlanned ?? slot.sets,
+        repCount: slot.rep_count,
+        repsLabel: slot.reps_label,
+        measure: slot.measure,
+        perSide: slot.per_side,
+        latestWeightLb: latestLoggedWeight(stamped, slot.exercise_id),
+        last: copy.lastTime === "—" ? null : { weightLb: copy.lastSessionWeightLb, reps: copy.lastReps },
+      });
+      return {
+        exerciseId: slot.exercise_id,
+        name: slot.name,
+        ...filled,
+        targetWeightLb: live && !slot.is_cardio ? (openSet?.weightLb ?? null) : filled.targetWeightLb,
+        targetReps: live && !slot.is_cardio ? (openSet?.reps ?? slot.rep_count) : filled.targetReps,
+        measure: slot.measure,
+        perSide: slot.per_side,
+        isCardio: slot.is_cardio,
+        cardioMin: slot.cardio_min,
+        notes: slot.notes,
+        lastTime: copy.lastTime === "—" ? null : copy.lastTime,
+        lastWeightLb: copy.lastSessionWeightLb,
+        lastReps: copy.lastReps,
+      };
+    }),
   };
 }
 
@@ -548,9 +648,9 @@ function historyCopy(
   measure: string,
   perSide: boolean,
   currentSessionId: string,
-): { lastTime: string; prLine: string; lastWeightLb: number | null } {
+): { lastTime: string; prLine: string; lastWeightLb: number | null; lastReps: number | null; lastSessionWeightLb: number | null } {
   const mine = history.filter((row) => row.exercise_id === exerciseId);
-  if (mine.length === 0) return { lastTime: "—", prLine: "—", lastWeightLb: null };
+  if (mine.length === 0) return { lastTime: "—", prLine: "—", lastWeightLb: null, lastReps: null, lastSessionWeightLb: null };
   const previous = mine.filter((row) => row.session_id !== currentSessionId);
   const bySession = new Map<string, Perf[]>();
   let latestSession = "";
@@ -581,7 +681,26 @@ function historyCopy(
     lastTime: last ? formatPerformance(last.weightLb, last.reps, measure, perSide) : "—",
     prLine: best ? formatPerformance(best.weightLb, best.reps, measure, perSide) : "—",
     lastWeightLb,
+    lastReps: last?.reps ?? null,
+    lastSessionWeightLb: last?.weightLb ?? null,
   };
+}
+
+async function loggedSets(db: Queryable, exerciseIds: string[]): Promise<HistRow[]> {
+  if (!exerciseIds.length) return [];
+  return rows<HistRow>(
+    db,
+    `SELECT s.exercise_id, sx.session_id, s.logged_at, s.weight_lb, s.reps
+     FROM sets s
+     JOIN session_exercises sx ON sx.id = s.session_exercise_id
+     JOIN sessions sess ON sess.id = sx.session_id
+     WHERE s.logged_at IS NOT NULL AND sess.deleted_at IS NULL AND s.exercise_id = ANY($1::text[])`,
+    [exerciseIds],
+  );
+}
+
+function stampHistory(history: HistRow[]): { exerciseId: string; loggedAt: number; weightLb: number | null }[] {
+  return history.map((row) => ({ exerciseId: row.exercise_id, loggedAt: row.logged_at.getTime(), weightLb: num(row.weight_lb) }));
 }
 
 function swapsFor(exerciseId: string, patternKey: string, explicit: Map<string, { id: string; name: string }[]>, catalog: ExerciseInfo[]) {
@@ -772,6 +891,8 @@ export async function startSession(dayId: string): Promise<SessionDTO> {
       [dayId],
     );
     const sessionId = randomUUID();
+    const history = await loggedSets(client, slots.map((slot) => slot.exercise_id));
+    const stamped = stampHistory(history);
     await client.query(
       "INSERT INTO sessions (id, day_id, name, started_at, week_start, sample) VALUES ($1, $2, $3, now(), $4, false)",
       [sessionId, dayId, day[0].name, weekStart],
@@ -802,12 +923,7 @@ export async function startSession(dayId: string): Promise<SessionDTO> {
           slot.superset_order,
         ],
       );
-      const last = await rows<{ weight_lb: number | null }>(
-        client,
-        "SELECT weight_lb FROM sets WHERE exercise_id = $1 AND logged_at IS NOT NULL ORDER BY logged_at DESC LIMIT 1",
-        [slot.exercise_id],
-      );
-      const weight = last[0] ? num(last[0].weight_lb) : null;
+      const weight = latestLoggedWeight(stamped, slot.exercise_id);
       for (let index = 1; index <= slot.sets; index += 1) {
         await client.query(
           `INSERT INTO sets (id, session_exercise_id, exercise_id, set_index, weight_lb, reps, note, is_pr)

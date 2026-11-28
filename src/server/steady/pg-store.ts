@@ -1,6 +1,7 @@
 import { randomUUID } from "crypto";
 import { pool, rows, tx, type Queryable } from "../db";
-import { refreshPrs } from "../data";
+import { getProgram, nextWorkoutTargets, refreshPrs } from "../data";
+import { prefillTarget } from "../../shared/targets";
 import { HttpError } from "../util";
 import { wallTimeToUtc, weekStartCivil } from "../../shared/time";
 import {
@@ -59,21 +60,36 @@ export class PgSteadyStore implements SteadyStore {
   }
 
   async plan() {
-    const days = await rows<{ id: string; name: string; summary: string }>(this.db, "SELECT id, name, summary FROM program_days ORDER BY sort_order");
-    const slots = await rows<{ day_id: string; exercise_id: string; name: string; sets: number; reps_label: string; notes: string | null }>(
-      this.db,
-      `SELECT pe.day_id, pe.exercise_id, e.name, pe.sets, pe.reps_label, pe.notes
-       FROM program_exercises pe JOIN exercises e ON e.id = pe.exercise_id
-       ORDER BY pe.sort_order`,
-    );
-    return days.map((day) => ({
+    const program = await getProgram();
+    return program.days.map((day) => ({
       id: day.id,
       name: day.name,
       summary: day.summary,
-      exercises: slots
-        .filter((slot) => slot.day_id === day.id)
-        .map((slot) => ({ exerciseId: slot.exercise_id, name: slot.name, sets: slot.sets, repsLabel: slot.reps_label, notes: slot.notes })),
+      exercises: day.exercises.map((exercise) => ({
+        exerciseId: exercise.exerciseId,
+        name: exercise.name,
+        sets: exercise.sets,
+        notes: exercise.notes,
+        repCount: exercise.repCount,
+        isCardio: exercise.isCardio,
+        perSide: exercise.perSide,
+        measure: exercise.measure,
+        ...prefillTarget({
+          isCardio: exercise.isCardio,
+          sets: exercise.sets,
+          repCount: exercise.repCount,
+          repsLabel: exercise.repsLabel,
+          measure: exercise.measure,
+          perSide: exercise.perSide,
+          latestWeightLb: exercise.lastWeightLb,
+          last: exercise.lastTime ? { weightLb: exercise.lastSessionWeightLb, reps: exercise.lastReps } : null,
+        }),
+      })),
     }));
+  }
+
+  async nextWorkout(asOf: string) {
+    return nextWorkoutTargets(asOf);
   }
 
   async listWorkouts(start: string, end: string) {
