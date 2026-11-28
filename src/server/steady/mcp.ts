@@ -4,7 +4,7 @@ import { HttpError, cleanText, readDate } from "../util";
 import { steadyOrigin } from "./oauth";
 import { tokenHash, type ExerciseWrite, type SetWrite, type SteadyStore, type WorkoutWrite } from "./store";
 import type { SteadyDeps } from "./oauth";
-import { weekStartCivil } from "../../shared/time";
+import { civilDate, weekStartCivil } from "../../shared/time";
 
 const PROTOCOL = "2025-03-26";
 const SUPPORTED = new Set(["2024-11-05", "2025-03-26", "2025-06-18", "2025-11-25"]);
@@ -39,7 +39,8 @@ const TOOLS = [
   { name: "restore_workout", description: "Restore a soft-deleted workout.", inputSchema: { type: "object", properties: { id: { type: "string" } }, required: ["id"] } },
   { name: "list_deleted_workouts", description: "Workouts deleted in the last 30 days.", inputSchema: { type: "object", properties: {} } },
   { name: "list_exercises", description: "The exercise catalog.", inputSchema: { type: "object", properties: {} } },
-  { name: "get_plan", description: "The planned program for the week of a date, plus workouts already logged that day.", inputSchema: { type: "object", properties: { date: { type: "string" } }, required: ["date"] } },
+  { name: "get_plan", description: "The planned program for the week of a date, plus workouts already logged that day. Each exercise includes the same target sets, weight, and reps a new session would prefill.", inputSchema: { type: "object", properties: { date: { type: "string" } }, required: ["date"] } },
+  { name: "get_next_workout", description: "Targets for the next planned workout: sets, weight, and reps, matching the iOS session fields, plus last time. Optional date; defaults to today in America/Boise.", inputSchema: { type: "object", properties: { date: { type: "string" } } } },
   { name: "log_weight", description: "Log body weight in pounds for a date. A second log on the same date replaces it.", inputSchema: { type: "object", properties: { date: { type: "string" }, weightLb: { type: "number" }, unit: { type: "string" }, note: { type: "string" } }, required: ["date", "weightLb"] } },
   { name: "list_weights", description: "Weigh-ins in a date range, plus the 7-day average, change, and hint Steady already uses.", inputSchema: { type: "object", properties: { start: { type: "string" }, end: { type: "string" } }, required: ["start", "end"] } },
   { name: "edit_weight", description: "Change a weigh-in by id.", inputSchema: { type: "object", properties: { id: { type: "string" }, date: { type: "string" }, weightLb: { type: "number" }, note: { type: ["string", "null"] } }, required: ["id"] } },
@@ -142,6 +143,12 @@ async function callTool(store: SteadyStore, client: string, name: string, args: 
     const days = await store.plan();
     const workouts = await store.listWorkouts(date, date);
     return { date, weekStart: weekStartCivil(date), days, workouts };
+  }
+  if (name === "get_next_workout") {
+    const date = args.date == null || args.date === "" ? civilDate(now) : readDate(args.date);
+    const workout = await store.nextWorkout(date);
+    if (!workout) throw new HttpError(404, "No workout is planned");
+    return { workout };
   }
   if (name === "log_workout" || name === "edit_workout") {
     const catalog = await store.listExercises();

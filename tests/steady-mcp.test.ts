@@ -42,8 +42,9 @@ function seed(store: MemorySteadyStore) {
     id: "push",
     name: "Push",
     summary: "Pressing",
-    exercises: [{ exerciseId: "bench", name: "Bench press", sets: 3, repsLabel: "6-8", notes: null }],
+    exercises: [{ exerciseId: "bench", name: "Bench press", sets: 3, repsLabel: "6-8", notes: null, repCount: 5, isCardio: false, perSide: false, measure: "reps" }],
   });
+  store.latest.set("bench", { weightLb: 185, reps: 8, loggedAt: 1 });
 }
 
 async function json(response: Response) {
@@ -152,6 +153,24 @@ test("Steady MCP logs workouts and weight for the passcode account", async () =>
 
     const plan = await tool(server.base, access, "get_plan", { date: "2026-11-27" });
     assert.equal((plan.result.structuredContent?.days as Array<{ id: string }>)[0].id, "push");
+    const planned = (plan.result.structuredContent?.days as Array<{ exercises: Array<{ targetWeightLb: number; targetReps: number; targetSets: number }> }>)[0].exercises[0];
+    assert.equal(planned.targetWeightLb, 185);
+    assert.equal(planned.targetReps, 5);
+    assert.equal(planned.targetSets, 3);
+    const next = await tool(server.base, access, "get_next_workout", { date: "2026-11-27" });
+    const target = next.result.structuredContent?.workout as {
+      name: string;
+      dayId: string;
+      exercises: Array<{ exerciseId: string; targetWeightLb: number; targetReps: number; repsLabel: string; lastTime: string; lastReps: number }>;
+    };
+    assert.equal(target.name, "Push");
+    assert.equal(target.dayId, "push");
+    assert.equal(target.exercises[0].exerciseId, "bench");
+    assert.equal(target.exercises[0].targetWeightLb, 185);
+    assert.equal(target.exercises[0].targetReps, 5);
+    assert.equal(target.exercises[0].repsLabel, "6-8");
+    assert.equal(target.exercises[0].lastTime, "185 lb × 8");
+    assert.equal(target.exercises[0].lastReps, 8);
     const logged = await tool(server.base, access, "log_workout", {
       date: "2026-11-27",
       time: "17:30",

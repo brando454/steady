@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "crypto";
 import { HttpError } from "../util";
 import { averageChange, sevenDayAverage, weightHint } from "../../shared/logic";
+import { latestLoggedWeight, nextPlannedDay, prefillTarget } from "../../shared/targets";
 import { wallTimeToUtc, weekStartCivil } from "../../shared/time";
 
 export type SteadySource = { kind: "app" | "ai"; client: string | null };
@@ -61,8 +62,50 @@ export type WorkoutSummary = {
 };
 
 export type CatalogExercise = { id: string; name: string; muscles: string; measure: string; isCardio: boolean };
-export type PlanExercise = { exerciseId: string; name: string; sets: number; repsLabel: string; notes: string | null };
+export type PlanExercise = {
+  exerciseId: string;
+  name: string;
+  sets: number;
+  repsLabel: string;
+  notes: string | null;
+  repCount?: number;
+  isCardio?: boolean;
+  perSide?: boolean;
+  measure?: string;
+  targetSets?: number;
+  targetWeightLb?: number | null;
+  targetReps?: number | null;
+  lastTime?: string | null;
+  lastWeightLb?: number | null;
+  lastReps?: number | null;
+};
 export type PlanDay = { id: string; name: string; summary: string; exercises: PlanExercise[] };
+
+export type NextWorkout = {
+  date: string;
+  weekStart: string;
+  dayId: string;
+  name: string;
+  summary: string;
+  sessionId: string | null;
+  wrapped: boolean;
+  exercises: {
+    exerciseId: string;
+    name: string;
+    targetSets: number;
+    targetWeightLb: number | null;
+    targetReps: number | null;
+    repsLabel: string;
+    measure: string;
+    perSide: boolean;
+    isCardio: boolean;
+    cardioMin: number | null;
+    notes: string | null;
+    lastTime: string | null;
+    lastWeightLb: number | null;
+    lastReps: number | null;
+  }[];
+};
 
 export type WeighIn = { id: string; date: string; weightLb: number; note: string | null; source: SteadySource };
 export type WeightList = {
@@ -102,6 +145,7 @@ export type SteadyAudit = {
 export type SteadyStore = {
   listExercises(): Promise<CatalogExercise[]>;
   plan(): Promise<PlanDay[]>;
+  nextWorkout(asOf: string): Promise<NextWorkout | null>;
   listWorkouts(start: string, end: string): Promise<WorkoutSummary[]>;
   listDeletedWorkouts(): Promise<WorkoutSummary[]>;
   getWorkout(id: string): Promise<Workout | null>;
@@ -156,6 +200,8 @@ export function summarizeWeights(all: WeighIn[], start: string, end: string): We
 export class MemorySteadyStore implements SteadyStore {
   exercises: CatalogExercise[] = [];
   days: PlanDay[] = [];
+  /** Most recent logged set, keyed by exercise id. The same weight a new session prefills. */
+  latest = new Map<string, { weightLb: number | null; reps: number | null; loggedAt: number }>();
   workouts: Workout[] = [];
   weights: WeighIn[] = [];
   oauthClients = new Map<string, OauthClient>();
@@ -170,7 +216,64 @@ export class MemorySteadyStore implements SteadyStore {
   }
 
   async plan() {
-    return this.days;
+    return this.days.map((day) => ({ ...day, exercises: day.exercises.map((exercise) => this.withTarget(exercise)) }));
+  }
+
+  async nextWorkout(asOf: string) {
+    const choice = nextPlannedDay(
+      this.days.map((day) => day.id),
+      this.days.map((day) => ({ dayId: day.id, status: "todo" as const })),
+    );
+    if (!choice) return null;
+    const day = this.days.find((item) => item.id === choice.dayId) ?? this.days[0];
+    return {
+      date: asOf,
+      weekStart: weekStartCivil(asOf),
+      dayId: day.id,
+      name: day.name,
+      summary: day.summary,
+      sessionId: null,
+      wrapped: choice.wrapped,
+      exercises: day.exercises.map((exercise) => this.exerciseTarget(exercise)),
+    };
+  }
+
+  private exerciseTarget(exercise: PlanExercise): NextWorkout["exercises"][number] {
+    const filled = this.withTarget(exercise);
+    return {
+      exerciseId: filled.exerciseId,
+      name: filled.name,
+      targetSets: filled.targetSets ?? filled.sets,
+      targetWeightLb: filled.targetWeightLb ?? null,
+      targetReps: filled.targetReps ?? null,
+      repsLabel: filled.repsLabel,
+      measure: filled.measure ?? "reps",
+      perSide: filled.perSide ?? false,
+      isCardio: filled.isCardio ?? false,
+      cardioMin: null,
+      notes: filled.notes,
+      lastTime: filled.lastTime ?? null,
+      lastWeightLb: filled.lastWeightLb ?? null,
+      lastReps: filled.lastReps ?? null,
+    };
+  }
+
+  private withTarget(exercise: PlanExercise): PlanExercise {
+    const mine = this.latest.get(exercise.exerciseId);
+    const filled = prefillTarget({
+      isCardio: exercise.isCardio ?? false,
+      sets: exercise.sets,
+      repCount: exercise.repCount ?? 0,
+      repsLabel: exercise.repsLabel,
+      measure: exercise.measure ?? "reps",
+      perSide: exercise.perSide ?? false,
+      latestWeightLb: latestLoggedWeight(
+        [...this.latest.entries()].map(([exerciseId, row]) => ({ exerciseId, loggedAt: row.loggedAt, weightLb: row.weightLb })),
+        exercise.exerciseId,
+      ),
+      last: mine ? { weightLb: mine.weightLb, reps: mine.reps } : null,
+    });
+    return { ...exercise, ...filled };
   }
 
   async listWorkouts(start: string, end: string) {
