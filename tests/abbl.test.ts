@@ -747,6 +747,101 @@ test("estimate can correct a single item without a new endpoint", async () => {
   delete process.env.AI_API_KEY;
 });
 
+test("totals-only meals keep grams null and an update keeps the AI source", async () => {
+  resetRateLimit();
+  process.env.ABBL_ADMIN_SETUP_CODE = SETUP;
+  const store = new MemoryAbblStore();
+  const server = await listen(store);
+  const nutrients = { kcal: 640, protein_g: 32, carbs_g: 48, fat_g: 28, fiber_g: 6 as number | null };
+  try {
+    const kept = readIngredient({ name: "Snack", grams: null, nutrients }, { allowNullGrams: true });
+    assert.equal(kept.grams, null);
+    assert.equal(kept.nutrients.kcal, 640);
+    assert.throws(() => readIngredient({ name: "Snack", grams: null, nutrients }), /grams looks off/);
+    assert.throws(() => readIngredient({ name: "Oats", grams: 0, nutrients }, { allowNullGrams: true }), /grams looks off/);
+    assert.throws(() => readIngredient({ name: "Oats", grams: -5, nutrients }, { allowNullGrams: true }), /grams looks off/);
+    assert.throws(() => readIngredient({ name: "Oats", grams: "lots", nutrients }, { allowNullGrams: true }), /grams looks off/);
+
+    const admin = await redeem(server.base, SETUP, "Brandon");
+    const user = await store.findAdmin();
+    assert.ok(user);
+    const auth = { Authorization: `Bearer ${admin.body.token}`, "Content-Type": "application/json" };
+    const saved = await store.insertMeal(user.id, {
+      date: "2026-11-01",
+      time: "12:00",
+      meal: "lunch",
+      name: "Chicken bowl",
+      note: "from chat",
+      source: { kind: "ai", client: "Claude" },
+      deletedAt: null,
+      items: [{ name: "Chicken bowl", quantity: null, unit: null, grams: null, nutrients, source: "ai", edited: true, foodRef: null }],
+    });
+    const moved = await json(
+      await fetch(`${server.base}/api/abbl/v1/meals/${saved.id}`, {
+        method: "PUT",
+        headers: auth,
+        body: JSON.stringify({
+          date: "2026-11-02",
+          time: "19:00",
+          meal: "dinner",
+          items: [{ name: "Chicken bowl", grams: null, nutrients }],
+        }),
+      }),
+    );
+    assert.equal(moved.status, 200);
+    const meal = moved.body.meal as {
+      date: string;
+      meal: string;
+      name: string;
+      note: string;
+      source: { kind: string; client: string };
+      items: { grams: number | null; nutrients: { kcal: number } }[];
+    };
+    assert.equal(meal.date, "2026-11-02");
+    assert.equal(meal.meal, "dinner");
+    assert.equal(meal.name, "Chicken bowl");
+    assert.equal(meal.note, "from chat");
+    assert.equal(meal.source.kind, "ai");
+    assert.equal(meal.source.client, "Claude");
+    assert.equal(meal.items[0].grams, null);
+    assert.equal(meal.items[0].nutrients.kcal, 640);
+
+    const created = await json(
+      await fetch(`${server.base}/api/abbl/v1/meals`, {
+        method: "POST",
+        headers: auth,
+        body: JSON.stringify({ date: "2026-11-03", time: "15:00", meal: "snack", items: [{ name: "Snack", grams: null, nutrients }] }),
+      }),
+    );
+    assert.equal(created.status, 201);
+    assert.equal((created.body.meal as { items: { grams: number | null; nutrients: { kcal: number } }[] }).items[0].grams, null);
+    assert.equal((created.body.meal as { items: { nutrients: { kcal: number } }[] }).items[0].nutrients.kcal, 640);
+    assert.equal((created.body.meal as { source: { kind: string } }).source.kind, "app");
+
+    const zero = await json(
+      await fetch(`${server.base}/api/abbl/v1/meals`, {
+        method: "POST",
+        headers: auth,
+        body: JSON.stringify({ date: "2026-11-03", time: "15:10", items: [{ name: "Oats", grams: 0, nutrients }] }),
+      }),
+    );
+    assert.equal(zero.status, 400);
+    assert.match(String(zero.body.error), /grams looks off/);
+    const weighed = await json(
+      await fetch(`${server.base}/api/abbl/v1/meals`, {
+        method: "POST",
+        headers: auth,
+        body: JSON.stringify({ date: "2026-11-03", time: "15:20", items: [{ name: "Oats", grams: 40, nutrients }] }),
+      }),
+    );
+    assert.equal(weighed.status, 201);
+    assert.equal((weighed.body.meal as { items: { grams: number }[] }).items[0].grams, 40);
+  } finally {
+    delete process.env.ABBL_ADMIN_SETUP_CODE;
+    await server.close();
+  }
+});
+
 test("ABBL does not call Nightscout or send email", () => {
   const files = readdirSync(new URL("../src/server/abbl/", import.meta.url));
   for (const file of files) {

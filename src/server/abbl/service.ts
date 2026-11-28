@@ -125,7 +125,7 @@ export function readRecipeBody(body: Record<string, unknown>): NewRecipe {
   if (!Array.isArray(body.ingredients) || body.ingredients.length < 1 || body.ingredients.length > 80) {
     throw new HttpError(400, "Add at least one ingredient");
   }
-  return { name, servings, notes, yieldGrams, ingredients: body.ingredients.map(readIngredient) };
+  return { name, servings, notes, yieldGrams, ingredients: body.ingredients.map((item) => readIngredient(item)) };
 }
 
 export function readTime(value: unknown): string {
@@ -210,7 +210,7 @@ export async function itemsFromMealBody(store: AbblStore, userId: string, body: 
   if (hasItems) {
     const items = body.items as unknown[];
     if (items.length < 1 || items.length > 80) throw new HttpError(400, "Add at least one item");
-    return items.map(readIngredient);
+    return items.map((item) => readIngredient(item, { allowNullGrams: true }));
   }
   const recipe = await store.getRecipe(userId, String(body.recipeId));
   if (!recipe) throw new HttpError(404, "Recipe not found");
@@ -229,7 +229,11 @@ export async function itemsFromMealBody(store: AbblStore, userId: string, body: 
   return recipe.ingredients.map((item) => scaleIngredient(item, factor));
 }
 
-export function readMealMeta(body: Record<string, unknown>, now: Date): {
+export function readMealMeta(
+  body: Record<string, unknown>,
+  now: Date,
+  previous?: { name: string | null; note: string | null; source: MealSource },
+): {
   date: string;
   time: string;
   meal: MealType | null;
@@ -241,10 +245,15 @@ export function readMealMeta(body: Record<string, unknown>, now: Date): {
     date: readLoggedDate(body.date, now),
     time: readTime(body.time),
     meal: readMealType(body.meal),
-    name: optionalMealText(body.name, "name", 120),
-    note: optionalMealText(body.note, "note", 500),
-    source: readMealSource(body.source),
+    name: keptText(body, "name", previous?.name ?? null, previous != null, "name", 120),
+    note: keptText(body, "note", previous?.note ?? null, previous != null, "note", 500),
+    source: previous != null && !("source" in body) ? previous.source : readMealSource(body.source),
   };
+}
+
+function keptText(body: Record<string, unknown>, key: string, previous: string | null, keep: boolean, field: string, max: number): string | null {
+  if (keep && !(key in body)) return previous;
+  return optionalMealText(body[key], field, max);
 }
 
 export async function requireUser(store: AbblStore, header: string | undefined): Promise<AbblUser> {

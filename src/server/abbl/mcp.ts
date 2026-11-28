@@ -102,7 +102,7 @@ function itemsFromTool(body: Record<string, unknown>): Ingredient[] {
   if (hasItems) {
     const items = body.items as unknown[];
     if (items.length < 1 || items.length > 80) throw new HttpError(400, "Add at least one item");
-    return items.map(readIngredient);
+    return items.map((item) => readIngredient(item));
   }
   const name = typeof body.name === "string" && body.name.trim() ? body.name.trim().slice(0, 120) : typeof body.note === "string" && body.note.trim() ? body.note.trim().slice(0, 120) : "Meal";
   return [{ name, quantity: null, unit: null, grams: null, nutrients: readNutrients(body.totals), source: "ai", edited: true, foodRef: null }];

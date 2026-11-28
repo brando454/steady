@@ -126,6 +126,13 @@ export function parseMacro(value: unknown): number | null {
   return round1(number);
 }
 
+function readGrams(value: unknown, allowNull: boolean): number | null {
+  if (allowNull && (value == null || value === "")) return null;
+  const grams = readMacro(value, "grams");
+  if (grams <= 0) throw new HttpError(400, "grams looks off");
+  return grams;
+}
+
 function readMacro(value: unknown, field: string): number {
   const number = parseMacro(value);
   if (number == null) throw new HttpError(400, `${field} looks off`);
@@ -176,13 +183,12 @@ function readUnit(value: unknown): IngredientUnit | null {
   return unit as IngredientUnit;
 }
 
-export function readIngredient(value: unknown): Ingredient {
+export function readIngredient(value: unknown, options?: { allowNullGrams?: boolean }): Ingredient {
   if (!value || typeof value !== "object") throw new HttpError(400, "Ingredient is missing");
   const record = value as Record<string, unknown>;
   const name = typeof record.name === "string" ? record.name.trim() : "";
   if (!name || name.length > 120) throw new HttpError(400, "Ingredient name looks off");
-  const grams = readMacro(record.grams, "grams");
-  if (grams <= 0) throw new HttpError(400, "grams looks off");
+  const grams = readGrams(record.grams, options?.allowNullGrams === true);
   const source = record.source == null || record.source === "" ? null : typeof record.source === "string" ? record.source.trim().slice(0, 40) : null;
   if (record.source != null && record.source !== "" && source == null) throw new HttpError(400, "source looks off");
   return {
