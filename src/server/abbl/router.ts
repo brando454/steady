@@ -364,7 +364,9 @@ export function createAbblRouter(deps: AbblDeps): Router {
     "/meals/:id",
     asyncRoute(async (req, res) => {
       const user = await requireUser(store, req.get("authorization"));
-      const meta = readMealMeta(req.body ?? {}, now());
+      const existing = await store.getMeal(user.id, req.params.id);
+      if (!existing || existing.deletedAt) throw new HttpError(404, "Meal not found");
+      const meta = readMealMeta(req.body ?? {}, now(), existing);
       const items = await itemsFromMealBody(store, user.id, req.body ?? {});
       const meal = await store.updateMeal(user.id, req.params.id, { ...meta, deletedAt: null, items });
       if (!meal) throw new HttpError(404, "Meal not found");
